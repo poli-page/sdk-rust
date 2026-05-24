@@ -9,13 +9,19 @@
 pub mod client;
 pub mod documents;
 pub mod error;
+pub mod fs;
 pub mod render;
 pub mod retry;
 pub mod types;
 
+#[cfg(feature = "blocking")]
+#[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
+pub mod blocking;
+
 pub use client::{PoliPage, PoliPageBuilder};
 pub use documents::Documents;
 pub use error::{error_codes, Error};
+pub use fs::render_to_file;
 pub use render::Render;
 pub use retry::RetryEvent;
 pub use types::{

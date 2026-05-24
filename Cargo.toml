@@ -20,7 +20,7 @@ path = "src/lib.rs"
 
 [dependencies]
 reqwest      = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-tokio        = { version = "1.40", default-features = false, features = ["time", "rt"] }
+tokio        = { version = "1.40", default-features = false, features = ["time", "rt", "fs", "io-util"] }
 serde        = { version = "1.0", features = ["derive"] }
 serde_json   = "1.0"
 thiserror    = "2.0"
