@@ -108,6 +108,25 @@ pub(crate) fn attach_client(
     descriptor
 }
 
+/// Result of [`crate::Documents::preview`].
+///
+/// Assembled from the `text/html` response body plus the `X-Document-Page-Count`
+/// header — `documents.preview` is the only SDK endpoint that returns
+/// `text/html` directly (every other endpoint returns JSON or PDF bytes).
+///
+/// **Note**: the field is `page_count` (singular), not `total_pages`. That
+/// matches the deployed API's header name and differs from
+/// [`crate::PreviewResult::total_pages`] — spec §5.5 / Node SDK commit
+/// `8523e13`.
+#[derive(Debug, Clone)]
+pub struct DocumentPreviewResult {
+    /// The stored paginated HTML, exactly as the API returned it.
+    pub html: String,
+    /// Page count from the `X-Document-Page-Count` header. Defaults to `0`
+    /// when the header is absent or unparseable (NaN-tolerant — Node behavior).
+    pub page_count: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

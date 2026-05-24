@@ -15,6 +15,7 @@ use http::{HeaderMap, Method};
 use tracing::{debug, warn};
 use url::Url;
 
+use crate::documents::Documents;
 use crate::internal::constants::{
     DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY, DEFAULT_TIMEOUT, HEADER_REQUEST_ID,
 };
@@ -482,8 +483,10 @@ fn fire_error_hook(hook: Option<&ErrorHook>, error: &Error) {
 pub struct PoliPage {
     /// The `render` namespace — `pdf`, `pdf_stream`, `preview`, `document`.
     pub render: Render,
-    // Held so Phase 4's `documents` namespace can spawn from the same `Arc`
-    // without re-wiring the builder. Used by `inner()` below.
+    /// The `documents` namespace — `get`, `preview`, `thumbnails`, `delete`.
+    pub documents: Documents,
+    // Held so future namespaces can spawn from the same `Arc` without
+    // re-wiring the builder.
     inner: Arc<ClientInner>,
 }
 
@@ -658,6 +661,7 @@ impl PoliPageBuilder {
         });
         Ok(PoliPage {
             render: Render::new(Arc::clone(&inner)),
+            documents: Documents::new(Arc::clone(&inner)),
             inner,
         })
     }
