@@ -820,6 +820,8 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http",
+ "httpdate",
+ "rand 0.9.4",
  "reqwest",
  "serde",
  "serde_json",

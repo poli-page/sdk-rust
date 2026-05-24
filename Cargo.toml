@@ -30,6 +30,8 @@ futures-core = "0.3"
 tracing      = "0.1"
 http         = "1.1"
 url          = "2.5"
+httpdate     = "1.0"
+rand         = "0.9"
 
 [dev-dependencies]
 tokio              = { version = "1.40", features = ["macros", "rt-multi-thread", "time"] }

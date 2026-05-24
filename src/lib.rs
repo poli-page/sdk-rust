@@ -4,8 +4,15 @@
 
 //! Poli Page SDK for Rust — render PDFs from HTML templates via the Poli Page API.
 //!
-//! This is the Phase 0 scaffold; the real client surface lands in later phases.
-//! See the implementation plan at the repository root for the build order.
+//! This is the Phase 1 transport-core scaffold; the orchestrating `PoliPage`
+//! client lands in Phase 2. See the implementation plan at the repository
+//! root for the build order.
+
+pub mod error;
+
+pub use error::{error_codes, Error};
+
+pub(crate) mod internal;
 
 /// Async client for the Poli Page API.
 ///
