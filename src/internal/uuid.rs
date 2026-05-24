@@ -1,9 +1,6 @@
 //! Thin wrapper over the `uuid` crate so the call sites don't depend on
 //! `uuid::Uuid` directly. Mirrors Node's `crypto.randomUUID()` usage.
 
-// Phase 1 ships the wrapper; the orchestrator that calls it lands in Phase 2.
-#![allow(dead_code)]
-
 /// Generate a fresh v4 UUID as its 36-character lowercase string form.
 pub(crate) fn new_v4_string() -> String {
     uuid::Uuid::new_v4().to_string()

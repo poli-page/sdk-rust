@@ -165,6 +165,119 @@ pub enum Error {
     },
 }
 
+impl Clone for Error {
+    /// Hand-rolled `Clone` so `RetryEvent` can carry an owned `Error`.
+    ///
+    /// The `Box<dyn std::error::Error + Send + Sync>` source on `Connection`
+    /// and `Download` is NOT `Clone` (the trait object holds whatever the
+    /// original error was — `reqwest::Error`, `io::Error`, etc.). Per spec
+    /// §10.2 the cloned event drops the source — `message`, `code`, `status`,
+    /// and `request_id` are preserved; the underlying chain isn't. Good
+    /// enough for observability; users who need the source should inspect
+    /// the original `Error` returned by the method call.
+    fn clone(&self) -> Self {
+        match self {
+            Error::InvalidOptions { message } => Error::InvalidOptions {
+                message: message.clone(),
+            },
+            Error::Connection { message, .. } => Error::Connection {
+                message: message.clone(),
+                source: format!("(source dropped on clone): {message}").into(),
+            },
+            Error::Timeout { timeout } => Error::Timeout { timeout: *timeout },
+            Error::Aborted => Error::Aborted,
+            Error::Download {
+                message, status, ..
+            } => Error::Download {
+                message: message.clone(),
+                status: *status,
+                source: None,
+            },
+            Error::Internal { message, status } => Error::Internal {
+                message: message.clone(),
+                status: *status,
+            },
+            Error::BadRequest {
+                status,
+                code,
+                message,
+                request_id,
+            } => Error::BadRequest {
+                status: *status,
+                code: code.clone(),
+                message: message.clone(),
+                request_id: request_id.clone(),
+            },
+            Error::Auth {
+                status,
+                code,
+                message,
+                request_id,
+            } => Error::Auth {
+                status: *status,
+                code: code.clone(),
+                message: message.clone(),
+                request_id: request_id.clone(),
+            },
+            Error::PermissionDenied {
+                status,
+                code,
+                message,
+                request_id,
+            } => Error::PermissionDenied {
+                status: *status,
+                code: code.clone(),
+                message: message.clone(),
+                request_id: request_id.clone(),
+            },
+            Error::NotFound {
+                status,
+                code,
+                message,
+                request_id,
+            } => Error::NotFound {
+                status: *status,
+                code: code.clone(),
+                message: message.clone(),
+                request_id: request_id.clone(),
+            },
+            Error::Gone {
+                status,
+                code,
+                message,
+                request_id,
+            } => Error::Gone {
+                status: *status,
+                code: code.clone(),
+                message: message.clone(),
+                request_id: request_id.clone(),
+            },
+            Error::RateLimited {
+                status,
+                code,
+                message,
+                request_id,
+            } => Error::RateLimited {
+                status: *status,
+                code: code.clone(),
+                message: message.clone(),
+                request_id: request_id.clone(),
+            },
+            Error::Api {
+                status,
+                code,
+                message,
+                request_id,
+            } => Error::Api {
+                status: *status,
+                code: code.clone(),
+                message: message.clone(),
+                request_id: request_id.clone(),
+            },
+        }
+    }
+}
+
 impl Error {
     /// `true` for `Auth` (401) and `PermissionDenied` (403) — spec §7.1.
     pub fn is_auth_error(&self) -> bool {

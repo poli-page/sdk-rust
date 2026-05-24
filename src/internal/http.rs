@@ -10,11 +10,6 @@
 //! see `pub(crate)` items. Plan §13 Phase 1 references `tests/unit_http.rs`
 //! but §14.1's rule wins; the file lives inline here for visibility reasons.
 
-// Phase 1 ships the helpers; their consumers (client retry loop, render /
-// documents namespaces) land in Phase 2+. Suppress the per-fn dead-code lint
-// module-wide rather than annotate each fn individually.
-#![allow(dead_code)]
-
 use std::time::{Duration, SystemTime};
 
 use http::{header, HeaderMap, HeaderValue, Method};
