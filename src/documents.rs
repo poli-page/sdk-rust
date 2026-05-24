@@ -42,6 +42,17 @@ impl Documents {
     /// - [`Error::Gone`] when the document was deleted.
     /// - [`Error::Auth`] / [`Error::PermissionDenied`] on credential issues.
     /// - [`Error::Internal`] when the response body fails to parse.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::PoliPage;
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let doc = client.documents.get("doc_abc123").await?;
+    /// let pdf = doc.download_pdf().await?;
+    /// # let _ = pdf; Ok(()) }
+    /// ```
     pub async fn get(&self, id: &str) -> Result<DocumentDescriptor, Error> {
         let path = format!("{PATH_DOCUMENTS}/{}", encode_path_segment(id));
         let raw: DocumentDescriptor = execute_get_json(&self.inner, &path).await?;
@@ -59,6 +70,17 @@ impl Documents {
     /// # Errors
     ///
     /// Mirrors [`Self::get`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::PoliPage;
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let preview = client.documents.preview("doc_abc123").await?;
+    /// println!("{} pages: {}", preview.page_count, preview.html.len());
+    /// # Ok(()) }
+    /// ```
     pub async fn preview(&self, id: &str) -> Result<DocumentPreviewResult, Error> {
         let path = format!("{PATH_DOCUMENTS}/{}/preview", encode_path_segment(id),);
         let attempt = HttpAttempt {
@@ -87,6 +109,22 @@ impl Documents {
     /// POSTs `/v1/documents/:id/thumbnails` with the options wrapped under a
     /// `thumbnails` key (a deployed-API quirk), then unwraps the server's
     /// `{ thumbnails: [...] }` envelope and returns the array.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::{PoliPage, ThumbnailFormat, ThumbnailOptions};
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let thumbs = client.documents.thumbnails(
+    ///     "doc_abc123",
+    ///     ThumbnailOptions { width: 320, format: Some(ThumbnailFormat::Png), ..ThumbnailOptions::new(320) },
+    /// ).await?;
+    /// for t in &thumbs {
+    ///     println!("page {} — {}×{}", t.page, t.width, t.height);
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn thumbnails(
         &self,
         id: &str,
@@ -117,6 +155,16 @@ impl Documents {
     ///
     /// Re-deleting an already-deleted document surfaces as [`Error::Gone`]
     /// (HTTP 410) — there's no special handling here.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::PoliPage;
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// client.documents.delete("doc_abc123").await?;
+    /// # Ok(()) }
+    /// ```
     pub async fn delete(&self, id: &str) -> Result<(), Error> {
         let path = format!("{PATH_DOCUMENTS}/{}", encode_path_segment(id));
         let attempt = HttpAttempt {

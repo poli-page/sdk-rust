@@ -280,6 +280,19 @@ impl Clone for Error {
 
 impl Error {
     /// `true` for `Auth` (401) and `PermissionDenied` (403) — spec §7.1.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::{Error, PoliPage, ProjectModeInput};
+    /// # async fn run(client: PoliPage, input: ProjectModeInput) {
+    /// if let Err(err) = client.render.pdf(input).await {
+    ///     if err.is_auth_error() {
+    ///         eprintln!("refresh credentials: {err}");
+    ///     }
+    /// }
+    /// # }
+    /// ```
     pub fn is_auth_error(&self) -> bool {
         matches!(self, Error::Auth { .. } | Error::PermissionDenied { .. })
     }

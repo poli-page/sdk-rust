@@ -54,6 +54,25 @@ impl PoliPage {
     ///
     /// Returns [`Error::InvalidOptions`] when `api_key` is empty or the
     /// tokio runtime fails to build.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::{ProjectModeInput, blocking::PoliPage};
+    /// use serde_json::json;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let pdf = client.render.pdf(ProjectModeInput {
+    ///     project: "getting-started".into(),
+    ///     template: "welcome".into(),
+    ///     version: Some("1.0.0".into()),
+    ///     data: json!({ "name": "World" }),
+    ///     ..Default::default()
+    /// })?;
+    /// std::fs::write("welcome.pdf", &pdf)?;
+    /// # Ok(()) }
+    /// ```
     pub fn new(api_key: impl Into<String>) -> Result<Self, Error> {
         Self::builder().api_key(api_key).build()
     }

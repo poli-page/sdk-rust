@@ -87,6 +87,18 @@ impl DocumentDescriptor {
     ///   back-reference (only happens if the caller manually constructed a
     ///   `DocumentDescriptor` via deserialization instead of obtaining it
     ///   from a client method).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::PoliPage;
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let doc = client.documents.get("doc_abc123").await?;
+    /// let pdf = doc.download_pdf().await?;
+    /// std::fs::write("invoice.pdf", &pdf)?;
+    /// # Ok(()) }
+    /// ```
     pub async fn download_pdf(&self) -> Result<Bytes, Error> {
         let client = self.client.as_ref().ok_or_else(|| Error::InvalidOptions {
             message: "DocumentDescriptor is missing its client back-reference \

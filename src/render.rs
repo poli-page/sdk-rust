@@ -46,6 +46,23 @@ impl Render {
     /// - [`Error::RateLimited`] when the tenant exceeds its quota.
     /// - [`Error::Api`] for any other 4xx/5xx after retries are exhausted.
     /// - [`Error::Connection`] / [`Error::Timeout`] for network failures.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::{InlineModeInput, PoliPage};
+    /// use serde_json::json;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let result = client.render.preview(InlineModeInput {
+    ///     template: "<h1>Hello {{ name }}</h1>".into(),
+    ///     data: json!({ "name": "World" }),
+    ///     ..Default::default()
+    /// }).await?;
+    /// println!("{} page(s)", result.total_pages);
+    /// # Ok(()) }
+    /// ```
     pub async fn preview(&self, input: impl Into<RenderInput>) -> Result<PreviewResult, Error> {
         let input = input.into();
         let idempotency_key = input
@@ -73,6 +90,25 @@ impl Render {
     /// Same `Error::*` shape as [`Self::document`] for the first hop;
     /// second-hop failures (presigned URL expired, S3 unreachable, etc.)
     /// surface as [`Error::Download`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::{PoliPage, ProjectModeInput};
+    /// use serde_json::json;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let pdf = client.render.pdf(ProjectModeInput {
+    ///     project: "billing".into(),
+    ///     template: "invoice".into(),
+    ///     version: Some("1.0.0".into()),
+    ///     data: json!({ "invoiceNumber": "INV-001" }),
+    ///     ..Default::default()
+    /// }).await?;
+    /// std::fs::write("invoice.pdf", &pdf)?;
+    /// # Ok(()) }
+    /// ```
     pub async fn pdf(&self, input: ProjectModeInput) -> Result<Bytes, Error> {
         let descriptor = self.document(input).await?;
         descriptor.download_pdf().await
@@ -96,6 +132,31 @@ impl Render {
     /// (non-2xx, network) surface synchronously here as [`Error::Download`];
     /// chunk-level errors mid-stream surface as `Err` items inside the
     /// stream itself.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::{PoliPage, ProjectModeInput};
+    /// use serde_json::json;
+    /// use std::future::poll_fn;
+    /// use std::pin::Pin;
+    /// use futures_core::Stream;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let mut stream = std::pin::pin!(client.render.pdf_stream(ProjectModeInput {
+    ///     project: "billing".into(),
+    ///     template: "invoice".into(),
+    ///     version: Some("1.0.0".into()),
+    ///     data: json!({}),
+    ///     ..Default::default()
+    /// }).await?);
+    /// while let Some(chunk) = poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await {
+    ///     let chunk = chunk?;
+    ///     # let _ = chunk;
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn pdf_stream(&self, input: ProjectModeInput) -> Result<PdfByteStream, Error> {
         let descriptor = self.document(input).await?;
         self.inner.stream_bytes(&descriptor.presigned_pdf_url).await
@@ -117,6 +178,26 @@ impl Render {
     /// - [`Error::Api`] for any other 4xx/5xx after retries are exhausted.
     /// - [`Error::Internal`] when the response body fails to parse as a
     ///   `DocumentDescriptor`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use poli_page::{PoliPage, ProjectModeInput};
+    /// use serde_json::json;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = PoliPage::new("pp_test_...")?;
+    /// let doc = client.render.document(ProjectModeInput {
+    ///     project: "billing".into(),
+    ///     template: "invoice".into(),
+    ///     version: Some("1.0.0".into()),
+    ///     data: json!({}),
+    ///     ..Default::default()
+    /// }).await?;
+    /// println!("stored as {} ({} pages)", doc.document_id, doc.page_count);
+    /// let pdf = doc.download_pdf().await?;
+    /// # let _ = pdf; Ok(()) }
+    /// ```
     pub async fn document(&self, input: ProjectModeInput) -> Result<DocumentDescriptor, Error> {
         let idempotency_key = input
             .idempotency_key
