@@ -17,8 +17,8 @@ pub use error::{error_codes, Error};
 pub use render::Render;
 pub use retry::RetryEvent;
 pub use types::{
-    Environment, InlineModeInput, MetadataValue, Orientation, PageFormat, PreviewResult,
-    ProjectModeInput, RenderInput, RenderMetadata,
+    DocumentDescriptor, Environment, InlineModeInput, MetadataValue, Orientation, PageFormat,
+    PreviewResult, ProjectModeInput, RenderInput, RenderMetadata,
 };
 
 pub(crate) mod internal;

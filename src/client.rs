@@ -4,10 +4,13 @@
 //! `#runWithRetry`, `#sendOnce`, `#fireHook`).
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
+use futures_core::Stream;
 use http::{HeaderMap, Method};
 use tracing::{debug, warn};
 use url::Url;
@@ -135,6 +138,115 @@ impl ClientInner {
         Err(err)
     }
 
+    /// Fetch the bytes at a presigned URL. Unauthenticated, single attempt,
+    /// no retries — per spec §5.5 the second-hop S3 fetch sits outside the
+    /// SDK's retry policy.
+    ///
+    /// Errors map to [`Error::Download`].
+    pub(crate) async fn fetch_bytes(&self, url: &str) -> Result<Bytes, Error> {
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| download_error(e, None))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Error::Download {
+                message: format!(
+                    "Failed to download PDF: {} {}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("")
+                )
+                .trim_end()
+                .to_owned(),
+                status: Some(status.as_u16()),
+                source: None,
+            });
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| download_error(e, Some(status.as_u16())))
+    }
+
+    /// Stream the bytes at a presigned URL chunk-by-chunk. Same auth/retry
+    /// posture as [`fetch_bytes`].
+    ///
+    /// Returns once the response headers arrive (so non-2xx is reported
+    /// before any bytes are read); subsequent reads on the returned stream
+    /// surface chunk-level errors as [`Error::Download`].
+    pub(crate) async fn stream_bytes(&self, url: &str) -> Result<PdfByteStream, Error> {
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| download_error(e, None))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Error::Download {
+                message: format!(
+                    "Failed to download PDF: {} {}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("")
+                )
+                .trim_end()
+                .to_owned(),
+                status: Some(status.as_u16()),
+                source: None,
+            });
+        }
+        Ok(PdfByteStream {
+            inner: Box::pin(response.bytes_stream()),
+        })
+    }
+}
+
+/// Convert a reqwest error from the second-hop S3 fetch into our
+/// [`Error::Download`] variant. The `status` argument is the response status
+/// when one was received before failing (e.g. body-read mid-stream); `None`
+/// otherwise.
+fn download_error(err: reqwest::Error, status: Option<u16>) -> Error {
+    let message = err.to_string();
+    let status = status.or_else(|| err.status().map(|s| s.as_u16()));
+    Error::Download {
+        message,
+        status,
+        source: Some(Box::new(err)),
+    }
+}
+
+/// Adapter that maps a reqwest byte stream's errors into our
+/// [`Error::Download`] variant — `futures_core::Stream` only, so consumers
+/// pull in `futures::StreamExt` (or hand-implement) to consume it.
+pub struct PdfByteStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+}
+
+impl std::fmt::Debug for PdfByteStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PdfByteStream").finish_non_exhaustive()
+    }
+}
+
+impl Stream for PdfByteStream {
+    type Item = Result<Bytes, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(bytes))),
+            Poll::Ready(Some(Err(e))) => {
+                let status = e.status().map(|s| s.as_u16());
+                Poll::Ready(Some(Err(download_error(e, status))))
+            }
+        }
+    }
+}
+
+impl ClientInner {
     async fn send_once(
         &self,
         attempt: &HttpAttempt<'_>,

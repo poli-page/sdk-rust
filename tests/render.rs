@@ -1,14 +1,18 @@
-//! Phase 2 end-to-end test for `client.render.preview`.
+//! End-to-end wiremock coverage for the `render` namespace.
 //!
-//! Ports the renderPreview describe block from
-//! `sdk-node/tests/render.test.ts:316-371`. Uses `wiremock` (Rust's
-//! async-native HTTP mock) so the test exercises the real `reqwest`
-//! transport, headers, body serialization, and response parsing — only
-//! the network is faked.
+//! Ports the renderPreview / renderPdf / renderDocument / renderPdfStream
+//! describe blocks from `sdk-node/tests/render.test.ts`. Uses `wiremock`
+//! (Rust's async-native HTTP mock) so the tests exercise the real `reqwest`
+//! transport, headers, body serialization, response parsing, and the
+//! two-hop second fetch against the "presigned" URL — only the network is
+//! faked.
 
 use std::time::Duration;
 
-use poli_page::{Environment, InlineModeInput, PoliPage, ProjectModeInput};
+use futures_util::StreamExt;
+use poli_page::{
+    DocumentDescriptor, Environment, InlineModeInput, PageFormat, PoliPage, ProjectModeInput,
+};
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -511,3 +515,403 @@ async fn preview_hook_panic_does_not_break_the_request() {
 // some patterns we may add later.
 #[allow(dead_code)]
 fn _ensure_request_import_used(_: &Request) {}
+
+// =============================================================================
+// Phase 3 — render.pdf / render.pdf_stream / render.document
+// =============================================================================
+
+/// Canonical descriptor wire shape, mirroring the Node sample at
+/// `tests/render.test.ts:99-117`. Callers override `presignedPdfUrl` to
+/// point at the local mock server.
+fn descriptor_wire(presigned_url: &str) -> serde_json::Value {
+    json!({
+        "documentId": "doc_abc123",
+        "organizationId": "org_xyz",
+        "projectId": "proj_42",
+        "projectSlug": "billing",
+        "templateId": "tpl_invoice_v1",
+        "templateSlug": "invoice",
+        "version": "1.0.0",
+        "environment": "live",
+        "apiKeyId": "key_live_abc",
+        "format": "A4",
+        "orientation": "portrait",
+        "locale": "en-US",
+        "pageCount": 2,
+        "sizeBytes": 38421,
+        "createdAt": "2026-04-30T19:45:22Z",
+        "metadata": {},
+        "presignedPdfUrl": presigned_url,
+        "expiresAt": "2026-04-30T20:00:22Z"
+    })
+}
+
+const PDF_STUB: &[u8] = b"%PDF-1.4 stub";
+
+#[tokio::test]
+async fn render_document_posts_to_v1_render_and_returns_parsed_descriptor() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/x.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let doc = client
+        .render
+        .document(ProjectModeInput {
+            project: "billing".into(),
+            template: "invoice".into(),
+            version: Some("1.0.0".into()),
+            data: json!({}),
+            ..Default::default()
+        })
+        .await
+        .expect("document");
+
+    assert_eq!(doc.document_id, "doc_abc123");
+    assert_eq!(doc.template_slug.as_deref(), Some("invoice"));
+    assert_eq!(doc.page_count, 2);
+    assert_eq!(doc.format, PageFormat::A4);
+    assert_eq!(doc.environment, Environment::Live);
+    assert_eq!(doc.presigned_pdf_url, presigned);
+
+    // The request landed on /v1/render with the project body.
+    let req = &server.received_requests().await.unwrap()[0];
+    assert_eq!(req.url.path(), "/v1/render");
+    let body: serde_json::Value = req.body_json().expect("json body");
+    assert_eq!(body["project"], "billing");
+    assert_eq!(body["template"], "invoice");
+}
+
+#[tokio::test]
+async fn render_document_attached_client_back_ref_lets_download_pdf_succeed() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/x.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/x.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(PDF_STUB))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let doc = client
+        .render
+        .document(project_input())
+        .await
+        .expect("document");
+    let bytes = doc.download_pdf().await.expect("download_pdf");
+    assert_eq!(&bytes[..4], b"%PDF");
+}
+
+#[tokio::test]
+async fn render_document_returns_empty_metadata_when_server_returns_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(descriptor_wire("https://nowhere.example/x.pdf")),
+        )
+        .mount(&server)
+        .await;
+    let client = build_client(server.uri()).await;
+    let doc = client
+        .render
+        .document(project_input())
+        .await
+        .expect("document");
+    assert!(doc.metadata.is_empty());
+}
+
+#[tokio::test]
+async fn render_document_download_pdf_surfaces_download_failed_on_403() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/expired.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/expired.pdf"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let doc = client
+        .render
+        .document(project_input())
+        .await
+        .expect("document");
+    let err = doc.download_pdf().await.expect_err("download must fail");
+    assert!(matches!(err, poli_page::Error::Download { .. }));
+    assert_eq!(err.code(), "DOWNLOAD_FAILED");
+    assert_eq!(err.status(), Some(403));
+}
+
+#[tokio::test]
+async fn render_pdf_two_hop_returns_bytes() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/x.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/x.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(PDF_STUB))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let bytes = client
+        .render
+        .pdf(project_input())
+        .await
+        .expect("pdf two-hop");
+    assert_eq!(&bytes[..4], b"%PDF");
+
+    // Exactly two requests: POST /v1/render, GET /presigned/x.pdf.
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].url.path(), "/v1/render");
+    assert_eq!(reqs[0].method.as_str(), "POST");
+    assert_eq!(reqs[1].url.path(), "/presigned/x.pdf");
+    assert_eq!(reqs[1].method.as_str(), "GET");
+}
+
+#[tokio::test]
+async fn render_pdf_strips_idempotency_and_timeout_from_render_body() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/x.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/x.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(PDF_STUB))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    client
+        .render
+        .pdf(ProjectModeInput {
+            project: "p".into(),
+            template: "t".into(),
+            version: Some("1.0.0".into()),
+            data: json!({}),
+            idempotency_key: Some("idem-caller-supplied".into()),
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
+        })
+        .await
+        .expect("pdf");
+
+    let reqs = server.received_requests().await.unwrap();
+    let render_req = reqs
+        .iter()
+        .find(|r| r.url.path() == "/v1/render")
+        .expect("render request");
+    let body: serde_json::Value = render_req.body_json().expect("json body");
+    let obj = body.as_object().unwrap();
+    assert!(!obj.contains_key("idempotencyKey"));
+    assert!(!obj.contains_key("timeout"));
+    // Caller's idempotency key still made it into the header.
+    let idem = render_req.headers.get("idempotency-key").unwrap();
+    assert_eq!(idem.to_str().unwrap(), "idem-caller-supplied");
+}
+
+#[tokio::test]
+async fn render_pdf_surfaces_download_failed_on_presigned_403() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/expired.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/expired.pdf"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let err = client
+        .render
+        .pdf(project_input())
+        .await
+        .expect_err("download must fail");
+    assert!(matches!(err, poli_page::Error::Download { .. }));
+    assert_eq!(err.code(), "DOWNLOAD_FAILED");
+    assert_eq!(err.status(), Some(403));
+}
+
+#[tokio::test]
+async fn render_pdf_does_not_retry_second_hop_failure() {
+    // The first hop's retry policy must NOT extend to the presigned URL —
+    // per spec §5.5 the S3 fetch is single-attempt regardless of
+    // max_retries.
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/expired.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/expired.pdf"))
+        .respond_with(ResponseTemplate::new(503)) // would normally be retryable
+        .mount(&server)
+        .await;
+
+    let client = PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url(server.uri())
+        .max_retries(5) // would retry ~6x for a 5xx if the policy applied
+        .retry_delay(Duration::from_millis(1))
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("builder");
+
+    let _ = client
+        .render
+        .pdf(project_input())
+        .await
+        .expect_err("expected Download error");
+    // Exactly 2 requests: 1 POST /v1/render + 1 GET /presigned/expired.pdf.
+    // (Not 1 + 6.)
+    let reqs = server.received_requests().await.unwrap();
+    let gets: Vec<_> = reqs
+        .iter()
+        .filter(|r| r.url.path() == "/presigned/expired.pdf")
+        .collect();
+    assert_eq!(gets.len(), 1, "second-hop must not be retried");
+}
+
+#[tokio::test]
+async fn render_pdf_stream_yields_pdf_bytes() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/x.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/x.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(PDF_STUB))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let mut stream = client
+        .render
+        .pdf_stream(project_input())
+        .await
+        .expect("pdf_stream");
+
+    // Drain the stream into a buffer.
+    let mut collected = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        collected.extend_from_slice(&chunk.expect("chunk"));
+    }
+    assert_eq!(&collected[..4], b"%PDF");
+}
+
+#[tokio::test]
+async fn render_pdf_stream_surfaces_download_failed_on_presigned_410() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/gone.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/gone.pdf"))
+        .respond_with(ResponseTemplate::new(410))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    // The header-arrival error surfaces synchronously from pdf_stream itself,
+    // not as a stream Err item.
+    let err = client
+        .render
+        .pdf_stream(project_input())
+        .await
+        .expect_err("stream must fail at header time");
+    assert!(matches!(err, poli_page::Error::Download { .. }));
+    assert_eq!(err.code(), "DOWNLOAD_FAILED");
+    assert_eq!(err.status(), Some(410));
+}
+
+#[tokio::test]
+async fn render_pdf_inline_input_does_not_compile_typecheck() {
+    // This test exists for its compile-time signal: render.pdf statically
+    // requires ProjectModeInput. The line below is a structural sanity check
+    // that we can construct a ProjectModeInput and pass it — paired with the
+    // doc-text in §9.1 about InlineModeInput being un-typeable here.
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/x.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/x.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(PDF_STUB))
+        .mount(&server)
+        .await;
+    let client = build_client(server.uri()).await;
+    let _bytes = client
+        .render
+        .pdf(ProjectModeInput {
+            project: "p".into(),
+            template: "t".into(),
+            version: Some("1.0.0".into()),
+            data: json!({}),
+            ..Default::default()
+        })
+        .await
+        .expect("pdf");
+    // Asserting on type only: this MUST fail to compile if uncommented.
+    //   let _ = client.render.pdf(InlineModeInput { ... }).await;
+    //
+    // (We can't put a compile-fail assertion here without `trybuild`, which
+    // is a Phase 6 deliverable.)
+    let _ = InlineModeInput {
+        template: "<p/>".into(),
+        data: json!({}),
+        ..Default::default()
+    };
+}
+
+fn project_input() -> ProjectModeInput {
+    ProjectModeInput {
+        project: "p".into(),
+        template: "t".into(),
+        version: Some("1.0.0".into()),
+        data: json!({}),
+        ..Default::default()
+    }
+}
+
+// Surface the import so unused-warning doesn't bite.
+#[allow(dead_code)]
+fn _ensure_document_descriptor_import_used(_: &DocumentDescriptor) {}
