@@ -62,9 +62,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: EmbarkStudios/cargo-deny-action@30f817c6f72275c6d54dc744fbca09ebc958599f # v2.0.19
+      - uses: EmbarkStudios/cargo-deny-action@a531616d8ce3b9177443e48a1159bc945a099823 # v2.0.19
         with:
           command: check
+          # Scope to the default-feature graph per spec §16.6: `native-tls` is
+          # an opt-in escape hatch (§5.1) and pulling in `openssl-sys` via that
+          # feature is intentional, not a regression. The action's default of
+          # `--all-features` would turn it on and trip the bans rule.
+          arguments: ""
 
   audit:
     name: cargo audit
@@ -92,7 +97,10 @@ jobs:
           cd "$tmp"
           cargo new --lib smoke
           cd smoke
-          printf '\n[dependencies]\npoli-page = { path = "%s" }\n' "$GITHUB_WORKSPACE" >> Cargo.toml
+          # `cargo new` already emits a `[dependencies]` section, so we add the
+          # path dep via `cargo add` rather than appending a second `[dependencies]`
+          # header (which would produce a TOML duplicate-key error).
+          cargo add poli-page --path "$GITHUB_WORKSPACE"
           cat > src/lib.rs <<'RUST'
           use poli_page::PoliPage;
 
