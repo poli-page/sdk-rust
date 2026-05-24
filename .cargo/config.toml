@@ -1,0 +1,11 @@
+# MSRV-aware dependency resolution (Cargo 1.84+).
+#
+# With this set, `cargo update` (and lock generation) prefers dep versions
+# whose `rust-version` is satisfied by our own `rust-version = "1.82"` —
+# falling back to older releases of a crate when its latest has bumped past
+# our MSRV. Without it, Cargo grabs the newest matching the SemVer range and
+# we end up with a lock that builds on stable but breaks on 1.82.
+#
+# See https://doc.rust-lang.org/cargo/reference/config.html#resolverincompatible-rust-versions
+[resolver]
+incompatible-rust-versions = "fallback"
