@@ -37,7 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .base_url(base_url)
         .build()?;
 
-    let out_dir = std::env::temp_dir().join("poli-page-rust-demo");
+    let out_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("outputs");
     fs::create_dir_all(&out_dir)?;
 
     println!("Output directory: {}", out_dir.display());
@@ -111,8 +113,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  → fresh presigned URL (expires {})", fresh.expires_at,);
 
     // ── 7. documents.thumbnails ─────────────────────────────────────
+    // Tier-gated on the API side: Free tier returns 403
+    // THUMBNAILS_NOT_AVAILABLE. Mirrors the Node SDK integration test
+    // (tests/integration/documents.integration.test.ts:39-52).
     step(7, 9, "documents.thumbnails — generate PNG thumbnails");
-    let thumbs = client
+    match client
         .documents
         .thumbnails(
             &descriptor.document_id,
@@ -122,13 +127,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ..ThumbnailOptions::new(320)
             },
         )
-        .await?;
-    println!("  → {} thumbnail(s)", thumbs.len());
-    for thumb in &thumbs {
-        println!(
-            "    · page {} — {}×{} {}",
-            thumb.page, thumb.width, thumb.height, thumb.content_type,
-        );
+        .await
+    {
+        Ok(thumbs) => {
+            println!("  → {} thumbnail(s)", thumbs.len());
+            for thumb in &thumbs {
+                println!(
+                    "    · page {} — {}×{} {}",
+                    thumb.page, thumb.width, thumb.height, thumb.content_type,
+                );
+            }
+        }
+        Err(Error::PermissionDenied { code, .. }) if code == "THUMBNAILS_NOT_AVAILABLE" => {
+            println!("  → skipped — requires Starter+ tier (Free tier returns 403 THUMBNAILS_NOT_AVAILABLE)");
+        }
+        Err(err) => return Err(err.into()),
     }
 
     // ── 8. documents.preview ────────────────────────────────────────

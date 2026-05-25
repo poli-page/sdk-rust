@@ -11,6 +11,9 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+// `async` kept so every call site reads `build_client(...).await` symmetrically
+// with the namespace methods being tested — no real work happens inside.
+#[allow(clippy::unused_async)]
 async fn build_client(uri: String) -> PoliPage {
     PoliPage::builder()
         .api_key("pp_test_x")

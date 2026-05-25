@@ -13,6 +13,7 @@ use crate::{DocumentDescriptor, Error, PreviewResult, ProjectModeInput, RenderIn
 /// The `client.render` namespace. Cheap to clone — internally an
 /// `Arc<ClientInner>`.
 #[derive(Clone)]
+#[must_use = "a Render handle is only useful when one of its methods is called"]
 pub struct Render {
     inner: Arc<ClientInner>,
 }
@@ -67,8 +68,7 @@ impl Render {
         let input = input.into();
         let idempotency_key = input
             .idempotency_key()
-            .map(str::to_owned)
-            .unwrap_or_else(auto_idempotency_key);
+            .map_or_else(auto_idempotency_key, str::to_owned);
         let timeout_override = input.timeout();
         execute_post_json(
             &self.inner,

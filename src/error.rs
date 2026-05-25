@@ -293,28 +293,33 @@ impl Error {
     /// }
     /// # }
     /// ```
+    #[must_use]
     pub fn is_auth_error(&self) -> bool {
         matches!(self, Error::Auth { .. } | Error::PermissionDenied { .. })
     }
 
     /// `true` for `RateLimited` (429).
+    #[must_use]
     pub fn is_rate_limit_error(&self) -> bool {
         matches!(self, Error::RateLimited { .. })
     }
 
     /// `true` for `BadRequest` (400 / 422).
+    #[must_use]
     pub fn is_validation_error(&self) -> bool {
         matches!(self, Error::BadRequest { .. })
     }
 
     /// `true` for `Connection` and `Timeout` — both indicate the request
     /// never produced a complete response.
+    #[must_use]
     pub fn is_network_error(&self) -> bool {
         matches!(self, Error::Connection { .. } | Error::Timeout { .. })
     }
 
     /// `true` when the request can safely be retried: any 5xx, 429, or
     /// network/timeout failure. Aborted requests are never retried.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         if matches!(self, Error::Aborted) {
             return false;
@@ -329,6 +334,7 @@ impl Error {
     }
 
     /// The HTTP status code returned by the upstream API, if one was received.
+    #[must_use]
     pub fn status(&self) -> Option<u16> {
         match self {
             Error::BadRequest { status, .. }
@@ -350,6 +356,7 @@ impl Error {
     /// (`"invalid_options"`, `"network_error"`, `"timeout"`, `"aborted"`,
     /// `"DOWNLOAD_FAILED"`, `"INTERNAL_ERROR"`); for API variants it's the
     /// `code` field returned by the server.
+    #[must_use]
     pub fn code(&self) -> &str {
         match self {
             Error::InvalidOptions { .. } => "invalid_options",
@@ -370,6 +377,7 @@ impl Error {
 
     /// The `X-Request-Id` value the server returned with this error, if any.
     /// Always `None` for SDK-internal variants (no upstream response).
+    #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         match self {
             Error::BadRequest { request_id, .. }

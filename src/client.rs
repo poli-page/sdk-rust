@@ -480,6 +480,7 @@ fn fire_error_hook(hook: Option<&ErrorHook>, error: &Error) {
 /// # Ok(()) }
 /// ```
 #[derive(Debug, Clone)]
+#[must_use = "a PoliPage client is only useful through its `render` or `documents` namespaces"]
 pub struct PoliPage {
     /// The `render` namespace — `pdf`, `pdf_stream`, `preview`, `document`.
     pub render: Render,
@@ -515,6 +516,7 @@ impl PoliPage {
     ///     .build()?;
     /// # let _ = client; Ok(()) }
     /// ```
+    #[must_use]
     pub fn builder() -> PoliPageBuilder {
         PoliPageBuilder::default()
     }
@@ -539,6 +541,7 @@ pub struct PoliPageBuilder {
     max_retries: Option<u32>,
     retry_delay: Option<Duration>,
     timeout: Option<Duration>,
+    http_client: Option<reqwest::Client>,
     on_retry: Option<RetryHook>,
     on_error: Option<ErrorHook>,
 }
@@ -551,6 +554,10 @@ impl std::fmt::Debug for PoliPageBuilder {
             .field("max_retries", &self.max_retries)
             .field("retry_delay", &self.retry_delay)
             .field("timeout", &self.timeout)
+            .field(
+                "http_client",
+                &self.http_client.as_ref().map(|_| "<custom>"),
+            )
             .field("on_retry", &self.on_retry.as_ref().map(|_| "<fn>"))
             .field("on_error", &self.on_error.as_ref().map(|_| "<fn>"))
             .finish()
@@ -594,6 +601,39 @@ impl PoliPageBuilder {
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Provide a pre-built [`reqwest::Client`] for all HTTP traffic.
+    ///
+    /// Use when you need to share a connection pool with the rest of your
+    /// application, or layer middleware (custom TLS, proxies, tracing) at
+    /// the `reqwest` level — the AWS / Stripe / Azure SDK pattern.
+    ///
+    /// **Interaction with other setters:** the SDK's [`Self::timeout`] is
+    /// enforced at the SDK layer (via `tokio::time::timeout`) and applies
+    /// regardless of whether you supply your own client. Any timeout
+    /// configured on the supplied [`reqwest::Client`] applies on top — the
+    /// effective deadline is `min(sdk_timeout, reqwest_timeout)`.
+    ///
+    /// ```no_run
+    /// use poli_page::PoliPage;
+    /// # fn run() -> Result<(), poli_page::Error> {
+    /// let http = reqwest::Client::builder()
+    ///     .pool_max_idle_per_host(32)
+    ///     .build()
+    ///     .map_err(|e| poli_page::Error::InvalidOptions {
+    ///         message: format!("custom http client: {e}"),
+    ///     })?;
+    /// let client = PoliPage::builder()
+    ///     .api_key("pp_test_...")
+    ///     .http_client(http)
+    ///     .build()?;
+    /// # let _ = client; Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.http_client = Some(http_client);
         self
     }
 
@@ -648,11 +688,14 @@ impl PoliPageBuilder {
             timeout: self.timeout.unwrap_or(DEFAULT_TIMEOUT),
             user_agent: format!("poli-page-sdk-rust/{}", env!("CARGO_PKG_VERSION")),
         };
-        let http = reqwest::Client::builder()
-            .build()
-            .map_err(|e| Error::InvalidOptions {
-                message: format!("could not build reqwest::Client: {e}"),
-            })?;
+        let http = match self.http_client {
+            Some(client) => client,
+            None => reqwest::Client::builder()
+                .build()
+                .map_err(|e| Error::InvalidOptions {
+                    message: format!("could not build reqwest::Client: {e}"),
+                })?,
+        };
         let inner = Arc::new(ClientInner {
             config,
             http,
@@ -750,5 +793,30 @@ mod tests {
     fn auto_idempotency_key_returns_uuid_v4() {
         let k = auto_idempotency_key();
         assert_eq!(k.len(), 36);
+    }
+
+    #[test]
+    fn builder_uses_injected_http_client() {
+        // A unique User-Agent on the supplied client is observable later via
+        // `ClientInner::http` only structurally — but the simpler invariant
+        // is that the builder *accepts* a client and stores it. We assert
+        // both: the builder field round-trips, and `build()` succeeds when
+        // one is supplied.
+        let custom = reqwest::Client::builder()
+            .user_agent("test-injected/1.0")
+            .build()
+            .expect("custom client builds");
+        let client = PoliPage::builder()
+            .api_key("pp_test_x")
+            .http_client(custom)
+            .build()
+            .expect("build with injected client");
+        // We can't peek at reqwest::Client internals, so the meaningful
+        // assertion is structural: a client was constructed and the
+        // namespaces are reachable. The wiremock test in
+        // `tests/render.rs::render_uses_injected_http_client` proves the
+        // injected client is the one that actually issues requests.
+        let _ = &client.render;
+        let _ = &client.documents;
     }
 }

@@ -16,6 +16,7 @@ use crate::{DocumentDescriptor, DocumentPreviewResult, Error, Thumbnail, Thumbna
 /// The `client.documents` namespace. Cheap to clone — internally an
 /// `Arc<ClientInner>`.
 #[derive(Clone)]
+#[must_use = "a Documents handle is only useful when one of its methods is called"]
 pub struct Documents {
     inner: Arc<ClientInner>,
 }
@@ -82,7 +83,7 @@ impl Documents {
     /// # Ok(()) }
     /// ```
     pub async fn preview(&self, id: &str) -> Result<DocumentPreviewResult, Error> {
-        let path = format!("{PATH_DOCUMENTS}/{}/preview", encode_path_segment(id),);
+        let path = format!("{PATH_DOCUMENTS}/{}/preview", encode_path_segment(id));
         let attempt = HttpAttempt {
             method: Method::GET,
             path: &path,
@@ -130,7 +131,7 @@ impl Documents {
         id: &str,
         options: ThumbnailOptions,
     ) -> Result<Vec<Thumbnail>, Error> {
-        let path = format!("{PATH_DOCUMENTS}/{}/thumbnails", encode_path_segment(id),);
+        let path = format!("{PATH_DOCUMENTS}/{}/thumbnails", encode_path_segment(id));
         // Wire-body wrap: { "thumbnails": <options> }
         let wrapped = serde_json::json!({ "thumbnails": &options });
         let idempotency_key = auto_idempotency_key();

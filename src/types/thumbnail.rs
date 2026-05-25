@@ -48,6 +48,7 @@ impl ThumbnailOptions {
     /// let opts = ThumbnailOptions::new(840);
     /// assert_eq!(opts.width, 840);
     /// ```
+    #[must_use]
     pub fn new(width: u32) -> Self {
         Self {
             width,

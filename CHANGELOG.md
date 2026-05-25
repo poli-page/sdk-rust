@@ -8,6 +8,41 @@ Breaking changes between major versions are summarized in [MIGRATION.md](MIGRATI
 
 ## [Unreleased]
 
+### Added
+
+- `PoliPageBuilder::http_client(reqwest::Client)` (and the same on
+  `blocking::PoliPageBuilder`) — inject a pre-built `reqwest::Client` to
+  share a connection pool with the rest of your application or layer
+  custom TLS / proxies / middleware at the `reqwest` level. The SDK's
+  own `timeout` still applies; consumers must depend on a compatible
+  `reqwest` 0.12.x.
+- Nightly integration CI: `.github/workflows/integration.yml` runs the
+  `--features integration --ignored` suite against `api-develop.poli.page`
+  on a 06:00 UTC cron + push-to-main, scoped to the upstream repo so
+  fork PRs don't require the `POLI_PAGE_API_KEY` secret. Resolves the
+  prior doc/CI mismatch with `CONTRIBUTING.md`.
+
+### Changed
+
+- `#[must_use]` added to the `PoliPage`, `Render`, and `Documents` client
+  handle types (both async and `blocking` flavours), to `PoliPage::builder`,
+  `ThumbnailOptions::new`, and to every `Error` accessor / predicate
+  (`is_auth_error`, `is_rate_limit_error`, `is_validation_error`,
+  `is_network_error`, `is_retryable`, `status`, `code`, `request_id`).
+  Compile-time nudge only; no behaviour change.
+- Lints tightened: `#![warn(clippy::pedantic, clippy::cargo)]` enabled at
+  the crate root with a curated allow-list (`module_name_repetitions`,
+  `missing_errors_doc`, `multiple_crate_versions`, the cast group,
+  `duration_suboptimal_units`, `doc_markdown`). Caught a handful of
+  cleanups in `render.rs`, `documents.rs`, and `tests/`.
+- `examples/demo.rs` now writes output PDFs and HTML to `examples/outputs/`
+  (git-ignored, excluded from the published crate) instead of the OS temp
+  directory — easier to inspect across runs.
+- `examples/demo.rs` step 7 (`documents.thumbnails`) tolerates Free-tier keys:
+  on `403 THUMBNAILS_NOT_AVAILABLE` it prints a skip notice and continues to
+  steps 8–9 instead of aborting the round-trip. Mirrors the Node SDK
+  integration test pattern at `tests/integration/documents.integration.test.ts`.
+
 ## [1.0.0-rc.1] - 2026-05-24
 
 Release-candidate cut for v1.0. Behaviour parity with `@poli-page/sdk@1.0.0`

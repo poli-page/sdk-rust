@@ -17,6 +17,9 @@ use serde_json::json;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+// `async` kept so every call site reads `build_client(...).await` symmetrically
+// with the namespace methods being tested — no real work happens inside.
+#[allow(clippy::unused_async)]
 async fn build_client(uri: String) -> PoliPage {
     PoliPage::builder()
         .api_key("pp_test_x")
@@ -900,6 +903,48 @@ async fn render_pdf_inline_input_does_not_compile_typecheck() {
         data: json!({}),
         ..Default::default()
     };
+}
+
+/// Proves `PoliPageBuilder::http_client` is actually used for requests:
+/// the injected client carries a default header the SDK never sets; the
+/// mock only matches when that header is present on the wire.
+#[tokio::test]
+async fn render_uses_injected_http_client() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render/preview"))
+        .and(header("x-sdk-test-marker", "injected-client"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "html": "<p>p</p>",
+            "totalPages": 1,
+            "environment": "sandbox"
+        })))
+        .mount(&server)
+        .await;
+
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    default_headers.insert(
+        "x-sdk-test-marker",
+        reqwest::header::HeaderValue::from_static("injected-client"),
+    );
+    let injected = reqwest::Client::builder()
+        .default_headers(default_headers)
+        .build()
+        .expect("custom client builds");
+
+    let client = PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url(server.uri())
+        .max_retries(0)
+        .http_client(injected)
+        .build()
+        .expect("builder");
+
+    client
+        .render
+        .preview(project_input())
+        .await
+        .expect("preview");
 }
 
 fn project_input() -> ProjectModeInput {

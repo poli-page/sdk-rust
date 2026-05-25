@@ -29,6 +29,7 @@ pub use fs::{render_to_file, BlockingPdfReader};
 /// Synchronous Poli Page client. Cheap to clone — internally an
 /// `Arc<tokio::runtime::Runtime>` plus the same shared async state.
 #[derive(Clone)]
+#[must_use = "a PoliPage client is only useful through its `render` or `documents` namespaces"]
 pub struct PoliPage {
     // Held so cloning the client keeps the runtime alive; render and
     // documents hold their own Arc clones to use it.
@@ -78,6 +79,7 @@ impl PoliPage {
     }
 
     /// Begin configuring a sync client with the builder pattern.
+    #[must_use]
     pub fn builder() -> PoliPageBuilder {
         PoliPageBuilder::default()
     }
@@ -133,6 +135,17 @@ impl PoliPageBuilder {
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.inner = self.inner.timeout(timeout);
+        self
+    }
+
+    /// Provide a pre-built [`reqwest::Client`] for all HTTP traffic — see
+    /// [`crate::PoliPageBuilder::http_client`] for caveats. Note that the
+    /// blocking client still uses an `async` [`reqwest::Client`] underneath
+    /// (the runtime is the only sync wrapper), so an async-flavoured client
+    /// is correct here.
+    #[must_use]
+    pub fn http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.inner = self.inner.http_client(http_client);
         self
     }
 
@@ -192,6 +205,7 @@ impl PoliPageBuilder {
 
 /// The sync `client.render` namespace.
 #[derive(Clone)]
+#[must_use = "a Render handle is only useful when one of its methods is called"]
 pub struct Render {
     pub(crate) runtime: Arc<Runtime>,
     pub(crate) inner: crate::Render,
@@ -236,6 +250,7 @@ impl Render {
 
 /// The sync `client.documents` namespace.
 #[derive(Clone)]
+#[must_use = "a Documents handle is only useful when one of its methods is called"]
 pub struct Documents {
     pub(crate) runtime: Arc<Runtime>,
     pub(crate) inner: crate::Documents,

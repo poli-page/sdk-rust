@@ -22,3 +22,9 @@ target
 
 # Claude Code local config
 /.claude/
+
+# Output files produced by `cargo run --example demo`
+/examples/outputs/
+
+.env
+.env*

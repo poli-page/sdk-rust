@@ -135,7 +135,7 @@ cargo run --example demo
 The demo exercises every public method against the real API:
 `render.pdf` → `render.pdf_stream` → `render_to_file` → `render.preview` → `render.document` → `documents.get` → `documents.thumbnails` → `documents.preview` → `documents.delete` → an Auth-error path.
 
-First run prompts for your `pp_test_*` key and saves it to `.env`. Subsequent runs are silent.
+First run prompts for your `pp_test_*` key and saves it to `.env`. Subsequent runs are silent. Output PDFs/HTML are written to `examples/outputs/` (git-ignored). On Free-tier keys the thumbnails step soft-skips with a notice (the API returns `403 THUMBNAILS_NOT_AVAILABLE`); upgrade to Starter+ to exercise it.
 
 ## Quick start (blocking)
 
