@@ -1,0 +1,16 @@
+---
+title: Migration
+description: Upgrade guides for moving between major versions of the Rust SDK.
+---
+
+This page tracks breaking changes between major versions of the `poli-page` crate. For the full per-release diff, see the [changelog](../changelog/).
+
+## v1.0
+
+The first stable release. The full v1.0 surface is documented in [`MIGRATION.md` in the repo](https://github.com/poli-page/sdk-rust/blob/main/MIGRATION.md).
+
+Short version: every render call now goes through a namespace (`client.render.pdf`, `client.render.preview`, `client.render.document`), all PDF-producing methods require project mode (with an explicit `version`), and inline mode is supported only on `render.preview`. The synchronous wrapper moved behind the `blocking` Cargo feature.
+
+## See also
+- [Changelog](../changelog/)
+- [Render modes](../../concepts/render-modes/)

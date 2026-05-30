@@ -1,0 +1,78 @@
+---
+title: Render modes
+description: Project mode renders a stored template; inline mode renders raw HTML and is supported only by preview.
+---
+
+The Rust SDK exposes two ways to describe what to render: **project mode** (a stored template at `project/template`) and **inline mode** (raw HTML you pass directly).
+
+Project mode is required by all the PDF-producing methods (`render.pdf`, `render.pdf_stream`, `render.document`, and the `render_to_file` helper). Inline mode is supported only by `render.preview`, which returns HTML rather than PDF bytes — useful for debugging template data without engaging the PDF pipeline.
+
+## Project mode
+
+You reference a template by its `project` and `template` slugs, plus a `data` object that fills the template's placeholders. Pin a `version` (required in project mode):
+
+```rust
+use poli_page::ProjectModeInput;
+use serde_json::json;
+
+let pdf = client.render.pdf(ProjectModeInput {
+    project: "billing".into(),
+    template: "invoice".into(),
+    version: Some("1.0.0".into()),
+    data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
+    ..Default::default()
+}).await?;
+```
+
+Project mode keeps templates centralized — anyone with dashboard access can edit them without touching code.
+
+## Inline mode (preview only)
+
+For one-off layout experiments, pass the HTML directly. `InlineModeInput` has a `template: String` field and no `project`:
+
+```rust
+use poli_page::InlineModeInput;
+use serde_json::json;
+
+let preview = client.render.preview(InlineModeInput {
+    template: "<h1>Hello {{ name }}</h1>".into(),
+    data: json!({ "name": "World" }),
+    ..Default::default()
+}).await?;
+```
+
+Inline mode only works with `render.preview`. To turn inline HTML into a PDF, save it as a template in the dashboard first, then use project mode.
+
+## Example
+
+```rust
+use poli_page::{InlineModeInput, PoliPage, ProjectModeInput};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
+
+    // Project mode — PDF
+    let _invoice_pdf = client.render.pdf(ProjectModeInput {
+        project: "billing".into(),
+        template: "invoice".into(),
+        version: Some("1.0.0".into()),
+        data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
+        ..Default::default()
+    }).await?;
+
+    // Inline mode — preview HTML only
+    let _greeting = client.render.preview(InlineModeInput {
+        template: "<h1>Hello {{ name }}</h1>".into(),
+        data: json!({ "name": "World" }),
+        ..Default::default()
+    }).await?;
+
+    Ok(())
+}
+```
+
+## See also
+- [Output handling](../output-handling/)
+- [Configuration](../configuration/)

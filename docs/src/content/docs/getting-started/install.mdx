@@ -1,0 +1,49 @@
+---
+title: Install
+description: How to install the Poli Page Rust SDK with cargo and the supported MSRV.
+---
+
+The Poli Page Rust SDK ships as the `poli-page` crate on crates.io. It targets the 2021 edition and a minimum supported Rust version (MSRV) of 1.93.
+
+## Install with cargo
+
+```bash
+cargo add poli-page
+```
+
+Or add it to your `Cargo.toml` manually:
+
+```toml
+[dependencies]
+poli-page = "1.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde_json = "1"
+```
+
+The async API requires a Tokio runtime. The synchronous wrapper is available behind the `blocking` Cargo feature:
+
+```toml
+[dependencies]
+poli-page = { version = "1.0", features = ["blocking"] }
+```
+
+## Rust version
+
+The crate is built and tested against Rust 1.93 on Linux, macOS, and Windows. See [runtime support](../../reference/runtime-support/) for the full matrix.
+
+## Example
+
+```rust
+use poli_page::PoliPage;
+
+#[tokio::main]
+async fn main() -> Result<(), poli_page::Error> {
+    let api_key = std::env::var("POLI_PAGE_API_KEY").expect("POLI_PAGE_API_KEY");
+    let _client = PoliPage::new(api_key)?;
+    Ok(())
+}
+```
+
+## See also
+- [Quick start](../quick-start/)
+- [Async runtime](../../concepts/async-runtime/)
