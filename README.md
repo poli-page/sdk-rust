@@ -8,7 +8,8 @@
 
 Official Rust SDK for [Poli Page](https://poli.page) — render polished PDFs from HTML templates via the Poli Page API.
 
-→ API reference (auto-generated rustdoc): **<https://docs.rs/poli-page>**
+→ **Documentation**: **<https://poli-page.github.io/sdk-rust/>**
+→ API reference on docs.rs: <https://docs.rs/poli-page>
 
 ## Install
 

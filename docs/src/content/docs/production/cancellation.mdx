@@ -1,0 +1,83 @@
+---
+title: Cancellation
+description: How to cancel in-flight requests by dropping the future or racing with a select.
+---
+
+In Rust, cancellation is built into the async model itself: drop the future and its work stops. The Poli Page SDK plays by these rules — dropping a render future cancels the underlying HTTP call. There is no `signal` parameter and no `AbortController` equivalent; you compose cancellation at the call site.
+
+## Cancel by dropping the future
+
+The simplest pattern wraps the call in `tokio::time::timeout`. When the timeout fires, the inner future is dropped and the request is cancelled:
+
+```rust
+use std::time::Duration;
+use tokio::time::timeout;
+
+let result = timeout(Duration::from_secs(5), client.render.pdf(input)).await;
+match result {
+    Ok(Ok(pdf)) => { let _ = pdf; }
+    Ok(Err(err)) => return Err(err.into()),
+    Err(_elapsed) => eprintln!("cancelled"),
+}
+```
+
+## Cancel via `select!`
+
+When you want to race a render against another signal — a `tokio::sync::Notify`, a `CancellationToken`, an inbound HTTP disconnect — use `tokio::select!`. The losing branch's future is dropped (cancelled) automatically:
+
+```rust
+use tokio::sync::Notify;
+use std::sync::Arc;
+
+let cancel = Arc::new(Notify::new());
+let cancel2 = Arc::clone(&cancel);
+// Cancel from somewhere else: cancel2.notify_one();
+
+tokio::select! {
+    result = client.render.pdf(input) => {
+        let _pdf = result?;
+    }
+    _ = cancel.notified() => {
+        eprintln!("cancelled by caller");
+    }
+}
+```
+
+## Cancellation vs timeout
+
+The client-level `timeout` setter on `PoliPageBuilder` is enforced **per attempt** inside the SDK. Wrapping the call in `tokio::time::timeout` enforces a deadline across the entire retry chain. Use the client option for per-attempt slow servers; use the outer wrapper for end-to-end deadlines.
+
+The SDK does not surface `Error::Aborted` for cancelled futures — the future is simply dropped before it can produce any value. `Error::Aborted` is reserved for future synchronization primitives.
+
+## Example
+
+```rust
+use poli_page::{PoliPage, ProjectModeInput};
+use serde_json::json;
+use std::time::Duration;
+use tokio::time::timeout;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
+
+    let input = ProjectModeInput {
+        project: "billing".into(),
+        template: "invoice".into(),
+        version: Some("1.0.0".into()),
+        data: json!({ "invoiceNumber": "INV-001" }),
+        ..Default::default()
+    };
+
+    match timeout(Duration::from_secs(10), client.render.pdf(input)).await {
+        Ok(Ok(pdf)) => { let _ = pdf; }
+        Ok(Err(err)) => return Err(err.into()),
+        Err(_elapsed) => eprintln!("render cancelled after 10s"),
+    }
+    Ok(())
+}
+```
+
+## See also
+- [Configuration](../../concepts/configuration/)
+- [Errors](../errors/)

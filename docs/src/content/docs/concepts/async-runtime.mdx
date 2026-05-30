@@ -1,0 +1,101 @@
+---
+title: Async runtime
+description: How the Rust SDK integrates with Tokio and what to do if you need a synchronous API.
+---
+
+The Rust SDK's primary surface is `async`. Every namespace method returns a future that the caller drives on a Tokio runtime. The crate depends on `tokio` directly — there is no runtime-agnostic abstraction layer.
+
+## Tokio is required for the async API
+
+The futures returned by `client.render.*` and `client.documents.*` use `tokio::time` (for per-attempt timeouts and retry backoff) and `reqwest` (which itself drives I/O on Tokio). They will not run on `async-std` or `smol`.
+
+The simplest setup uses the `#[tokio::main]` macro from the `tokio` crate's `macros` and `rt-multi-thread` features:
+
+```rust
+use poli_page::PoliPage;
+
+#[tokio::main]
+async fn main() -> Result<(), poli_page::Error> {
+    let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY").unwrap())?;
+    let _ = &client.render;
+    Ok(())
+}
+```
+
+For longer-running services, build the runtime explicitly and reuse it:
+
+```rust
+let runtime = tokio::runtime::Builder::new_multi_thread()
+    .enable_all()
+    .build()?;
+runtime.block_on(async {
+    let client = poli_page::PoliPage::new("pp_test_...").unwrap();
+    let _ = &client.render;
+});
+```
+
+## The `blocking` feature
+
+For short scripts, CLIs, or callers that already live inside a sync host, enable the `blocking` Cargo feature and use `poli_page::blocking::PoliPage`. Each method wraps the async equivalent in `runtime.block_on(...)` against a single current-thread runtime owned by the client.
+
+```toml
+[dependencies]
+poli-page = { version = "1.0", features = ["blocking"] }
+```
+
+```rust
+use poli_page::blocking::PoliPage;
+use poli_page::ProjectModeInput;
+use serde_json::json;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
+    let pdf = client.render.pdf(ProjectModeInput {
+        project: "billing".into(),
+        template: "invoice".into(),
+        version: Some("1.0.0".into()),
+        data: json!({ "invoiceNumber": "INV-001" }),
+        ..Default::default()
+    })?;
+    std::fs::write("invoice.pdf", &pdf)?;
+    Ok(())
+}
+```
+
+The blocking surface mirrors the async one one-to-one; it just removes the `.await` from every call site.
+
+## Cloning the client
+
+`PoliPage` is `Clone` — internally an `Arc<ClientInner>`. Build one client at startup and clone it into every request handler or spawned task; the underlying `reqwest::Client` pools connections across all clones.
+
+## Example
+
+```rust
+use poli_page::{PoliPage, ProjectModeInput};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
+
+    let mut handles = Vec::new();
+    for i in 0..4 {
+        let client = client.clone();
+        handles.push(tokio::spawn(async move {
+            client.render.pdf(ProjectModeInput {
+                project: "billing".into(),
+                template: "invoice".into(),
+                version: Some("1.0.0".into()),
+                data: json!({ "invoiceNumber": format!("INV-{i:03}") }),
+                ..Default::default()
+            }).await
+        }));
+    }
+    for h in handles { let _ = h.await?; }
+    Ok(())
+}
+```
+
+## See also
+- [Configuration](../configuration/)
+- [Output handling](../output-handling/)

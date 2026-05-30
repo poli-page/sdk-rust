@@ -1,0 +1,40 @@
+---
+title: Configuration
+description: Per-client options for timeouts, retries, custom HTTP client, and observability hooks.
+---
+
+The `PoliPageBuilder` accepts every configurable option as a chainable setter. Only `api_key` is required; everything else has a sensible default that matches the canonical SDK behavior shared by every Poli Page SDK.
+
+## Available options
+
+- `api_key` (required) — your `pp_test_` or `pp_live_` key.
+- `base_url` — override the API endpoint. Defaults to `https://api.poli.page`.
+- `timeout` — per-attempt timeout (`std::time::Duration`). Defaults to 60 seconds.
+- `max_retries` — maximum retry attempts on retryable errors. Defaults to `2` (three total attempts).
+- `retry_delay` — initial retry backoff. Defaults to 500 ms. Doubles each attempt.
+- `http_client` — inject a pre-built `reqwest::Client` for custom TLS, proxies, or shared connection pools.
+- `on_retry` / `on_error` — observability hooks. Never block, never mutate requests.
+
+## Example
+
+```rust
+use poli_page::PoliPage;
+use std::time::Duration;
+
+let client = PoliPage::builder()
+    .api_key(std::env::var("POLI_PAGE_API_KEY").unwrap())
+    .timeout(Duration::from_secs(30))
+    .max_retries(3)
+    .retry_delay(Duration::from_millis(250))
+    .on_retry(|event| {
+        eprintln!("↻ retry in {:?} (attempt {}): {}", event.delay, event.attempt, event.reason);
+    })
+    .build()
+    .unwrap();
+```
+
+## See also
+- [Authentication](../authentication/)
+- [Async runtime](../async-runtime/)
+- [Observability](../../production/observability/)
+- [Retries and idempotency](../../production/retries-and-idempotency/)

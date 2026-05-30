@@ -1,0 +1,59 @@
+---
+title: Authentication
+description: How the Poli Page SDK authenticates with the API using test or live keys.
+---
+
+import ApiKeyCallout from '@preset/components/ApiKeyCallout.astro';
+
+The Poli Page Rust SDK authenticates every request with a bearer token. The key prefix determines which environment the request hits.
+
+## API keys
+
+<ApiKeyCallout />
+
+Pass the key to the client constructor:
+
+```rust
+use poli_page::PoliPage;
+
+let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
+```
+
+The SDK never reads `POLI_PAGE_API_KEY` implicitly. You always pass the key in.
+
+## Custom base URL
+
+To target the develop environment (or a self-hosted gateway), use the builder:
+
+```rust
+use poli_page::PoliPage;
+
+let client = PoliPage::builder()
+    .api_key(std::env::var("POLI_PAGE_API_KEY")?)
+    .base_url("https://api-develop.poli.page")
+    .build()?;
+```
+
+## Example
+
+```rust
+use poli_page::PoliPage;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let base_url = std::env::var("POLI_PAGE_BASE_URL")
+        .unwrap_or_else(|_| "https://api.poli.page".to_string());
+
+    let client = PoliPage::builder()
+        .api_key(std::env::var("POLI_PAGE_API_KEY")?)
+        .base_url(base_url)
+        .build()?;
+
+    let _ = &client.render;
+    Ok(())
+}
+```
+
+## See also
+- [Configuration](../configuration/)
+- [Errors](../../production/errors/)

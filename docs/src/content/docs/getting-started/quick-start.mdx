@@ -1,0 +1,71 @@
+---
+title: Quick start
+description: Render your first PDF with the Poli Page Rust SDK in under 30 seconds.
+---
+
+import ApiKeyCallout from '@preset/components/ApiKeyCallout.astro';
+
+This page walks through your first render — from key to PDF — without touching the dashboard.
+
+<ApiKeyCallout />
+
+## Set your API key
+
+Export your key into the environment your binary runs in:
+
+```bash
+export POLI_PAGE_API_KEY=pp_test_...
+```
+
+## Render a PDF
+
+```rust
+use poli_page::{PoliPage, ProjectModeInput};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
+
+    let pdf = client.render.pdf(ProjectModeInput {
+        project: "billing".into(),
+        template: "invoice".into(),
+        version: Some("1.0.0".into()),
+        data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
+        ..Default::default()
+    }).await?;
+
+    std::fs::write("invoice.pdf", &pdf)?;
+    Ok(())
+}
+```
+
+`pdf` is a `bytes::Bytes`. Write it to disk, stream it to S3, or hand it directly to an HTTP response.
+
+## Example
+
+```rust
+use poli_page::{PoliPage, ProjectModeInput};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
+
+    let pdf = client.render.pdf(ProjectModeInput {
+        project: "billing".into(),
+        template: "invoice".into(),
+        version: Some("1.0.0".into()),
+        data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
+        ..Default::default()
+    }).await?;
+
+    std::fs::write("./invoices/INV-001.pdf", &pdf)?;
+    Ok(())
+}
+```
+
+## See also
+- [Authentication](../../concepts/authentication/)
+- [Render modes](../../concepts/render-modes/)
+- [Async runtime](../../concepts/async-runtime/)

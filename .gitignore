@@ -28,3 +28,11 @@ target
 
 .env
 .env*
+
+# Starlight docs site
+docs/node_modules/
+docs/dist/
+docs/.astro/
+docs/src/content/docs/reference/
+scripts/extract-api/node_modules/
+scripts/extract-api/.cache/

@@ -1,0 +1,82 @@
+---
+title: Observability
+description: Hooks and tracing spans for logging requests, retries, and errors without coupling to a logger.
+---
+
+The Rust SDK gives you two integration points for observability: the builder hooks (`on_retry`, `on_error`) for explicit callbacks, and `tracing` spans emitted by the SDK internals for structured tracing.
+
+## Builder hooks
+
+The SDK exposes two optional callbacks on `PoliPageBuilder`. Both are fire-and-forget — the SDK does not await them and does not let them mutate request behavior. Panics inside the callbacks are caught and discarded so a buggy hook never breaks a request.
+
+- `on_retry(|event: &RetryEvent|)` — fires before each retry sleep. `event.attempt`, `event.delay`, `event.reason: Error`.
+- `on_error(|err: &Error|)` — fires once per terminal failure (after retries are exhausted or for non-retryable errors).
+
+```rust
+use poli_page::PoliPage;
+
+let client = PoliPage::builder()
+    .api_key(std::env::var("POLI_PAGE_API_KEY").unwrap())
+    .on_retry(|event| {
+        eprintln!("↻ retry in {:?} (attempt {}): {}", event.delay, event.attempt, event.reason.code());
+    })
+    .on_error(|err| {
+        eprintln!("✗ {} {:?}: {}", err.code(), err.request_id(), err);
+    })
+    .build()
+    .unwrap();
+```
+
+The hooks are `Fn(...) + Send + Sync + 'static`. They run on whichever Tokio worker happens to drive the future — keep them quick and non-blocking.
+
+## Tracing spans
+
+The SDK emits `tracing` spans named `polipage.request` around each HTTP attempt, with fields `method`, `url`, and `request_id` (populated when the response carries `X-Request-Id`). Subscribe with any `tracing-subscriber` setup:
+
+```rust
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter("poli_page=debug")
+        .init();
+
+    // ... use the SDK as usual ...
+}
+```
+
+For OpenTelemetry, pair the SDK's tracing spans with `tracing-opentelemetry` to forward them to your collector.
+
+## Example
+
+```rust
+use poli_page::{PoliPage, ProjectModeInput};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+
+    let client = PoliPage::builder()
+        .api_key(std::env::var("POLI_PAGE_API_KEY")?)
+        .on_retry(|event| {
+            eprintln!("↻ retry in {:?} attempt={} reason={}", event.delay, event.attempt, event.reason.code());
+        })
+        .on_error(|err| {
+            eprintln!("✗ {} {:?}: {}", err.code(), err.request_id(), err);
+        })
+        .build()?;
+
+    let _pdf = client.render.pdf(ProjectModeInput {
+        project: "billing".into(),
+        template: "invoice".into(),
+        version: Some("1.0.0".into()),
+        data: json!({ "invoiceNumber": "INV-001" }),
+        ..Default::default()
+    }).await?;
+
+    Ok(())
+}
+```
+
+## See also
+- [Configuration](../../concepts/configuration/)
+- [Errors](../errors/)
