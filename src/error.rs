@@ -390,6 +390,59 @@ impl Error {
             _ => None,
         }
     }
+
+    /// Returns the canonical wire payload for framework integrations.
+    ///
+    /// `status` surfaces 503 for `Connection`, 504 for `Timeout`, and the
+    /// API status for status-bearing variants — independent of the
+    /// [`Error::status`] accessor, which keeps returning `None` for
+    /// transport variants so existing callers are unaffected. The
+    /// `message` is the variant's own `message` field (the bare reason),
+    /// not the prefixed `Display` form.
+    #[must_use]
+    pub fn to_payload(&self) -> ErrorPayload {
+        let status = match self {
+            Error::Connection { .. } => Some(503),
+            Error::Timeout { .. } => Some(504),
+            _ => self.status(),
+        };
+        let message = match self {
+            Error::InvalidOptions { message }
+            | Error::Connection { message, .. }
+            | Error::Download { message, .. }
+            | Error::Internal { message, .. }
+            | Error::BadRequest { message, .. }
+            | Error::Auth { message, .. }
+            | Error::PermissionDenied { message, .. }
+            | Error::NotFound { message, .. }
+            | Error::Gone { message, .. }
+            | Error::RateLimited { message, .. }
+            | Error::Api { message, .. } => message.clone(),
+            Error::Timeout { .. } => "request timed out".to_string(),
+            Error::Aborted => "request was aborted".to_string(),
+        };
+        ErrorPayload {
+            code: self.code().to_string(),
+            message,
+            status,
+            request_id: self.request_id().map(str::to_string),
+        }
+    }
+}
+
+/// Canonical wire payload for framework integrations:
+/// `{code, message, status, requestId}` with camelCase JSON keys.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorPayload {
+    /// Wire-level error code, verbatim from the API.
+    pub code: String,
+    /// Human-readable error message.
+    pub message: String,
+    /// HTTP status to surface on the wire. `None` is serialised as `null`.
+    pub status: Option<u16>,
+    /// Server-assigned request identifier, or `None`.
+    pub request_id: Option<String>,
 }
 
 /// Wire-level error code constants — see spec §7.4. Pass-through verbatim from
@@ -661,5 +714,45 @@ mod tests {
     #[test]
     fn display_for_aborted_is_terse() {
         assert_eq!(Error::Aborted.to_string(), "request was aborted");
+    }
+
+    // --- to_payload ---
+
+    #[test]
+    fn to_payload_uses_api_status_for_status_bearing_variants() {
+        let p = auth().to_payload();
+        assert_eq!(p.status, Some(401));
+        assert_eq!(p.code, error_codes::INVALID_API_KEY);
+        assert_eq!(p.message, "x");
+    }
+
+    #[test]
+    fn to_payload_uses_503_for_connection() {
+        let p = conn().to_payload();
+        assert_eq!(p.status, Some(503));
+        // Error::status() attribute stays None for transport variants.
+        assert_eq!(conn().status(), None);
+    }
+
+    #[test]
+    fn to_payload_uses_504_for_timeout() {
+        let p = timeout().to_payload();
+        assert_eq!(p.status, Some(504));
+        assert_eq!(timeout().status(), None);
+    }
+
+    #[test]
+    fn to_payload_message_does_not_include_status_prefix() {
+        // Bare reason — not the thiserror Display string ("API error (500): x").
+        let p = api(500).to_payload();
+        assert_eq!(p.message, "x");
+    }
+
+    #[test]
+    fn to_payload_serializes_camel_case_request_id() {
+        let p = api(500).to_payload();
+        let raw = serde_json::to_value(&p).expect("serialise payload");
+        assert!(raw.get("requestId").is_some(), "payload was {raw}");
+        assert!(raw.get("request_id").is_none(), "payload was {raw}");
     }
 }

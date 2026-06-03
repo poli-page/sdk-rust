@@ -77,25 +77,31 @@ pub(crate) fn parse_error_body(body: &[u8], status: u16) -> (String, String) {
     #[derive(serde::Deserialize)]
     struct ErrorBody {
         code: Option<String>,
+        detail: Option<String>,
+        title: Option<String>,
         message: Option<String>,
         error: Option<String>,
     }
 
+    // RFC 7807: prefer `detail` (specific reason) over `title` (generic name)
+    // over the legacy `message` field; fall back to a short canned status string.
+    // The code is verbatim from the API — never inferred from message.
     match serde_json::from_slice::<ErrorBody>(body) {
         Ok(b) => {
             let code = b
                 .code
-                .or_else(|| b.message.clone())
                 .or(b.error)
                 .unwrap_or_else(|| "unknown_error".to_string());
             let message = b
-                .message
-                .unwrap_or_else(|| format!("API error ({status}): {code}"));
+                .detail
+                .or(b.title)
+                .or(b.message)
+                .unwrap_or_else(|| format!("HTTP {status}"));
             (code, message)
         }
         Err(_) => (
             "INTERNAL_ERROR".to_string(),
-            format!("API error {status}: response body was not valid JSON"),
+            format!("HTTP {status}: response body was not valid JSON"),
         ),
     }
 }
@@ -299,31 +305,58 @@ mod tests {
     }
 
     #[test]
-    fn parse_error_body_falls_back_to_message_as_code_when_code_absent() {
+    fn parse_error_body_code_stays_unknown_when_only_message_present() {
         let (code, message) = parse_error_body(br#"{"message":"something broke"}"#, 400);
-        assert_eq!(code, "something broke");
+        assert_eq!(code, "unknown_error");
         assert_eq!(message, "something broke");
     }
 
     #[test]
-    fn parse_error_body_falls_back_to_error_field_when_code_and_message_absent() {
+    fn parse_error_body_falls_back_to_error_field_as_code() {
         let (code, message) = parse_error_body(br#"{"error":"oops"}"#, 400);
         assert_eq!(code, "oops");
-        assert_eq!(message, "API error (400): oops");
+        assert_eq!(message, "HTTP 400");
     }
 
     #[test]
     fn parse_error_body_returns_unknown_error_when_json_has_no_recognised_fields() {
         let (code, message) = parse_error_body(b"{}", 400);
         assert_eq!(code, "unknown_error");
-        assert_eq!(message, "API error (400): unknown_error");
+        assert_eq!(message, "HTTP 400");
     }
 
     #[test]
     fn parse_error_body_returns_internal_error_for_non_json_body() {
         let (code, message) = parse_error_body(b"not json", 502);
         assert_eq!(code, "INTERNAL_ERROR");
-        assert_eq!(message, "API error 502: response body was not valid JSON");
+        assert_eq!(message, "HTTP 502: response body was not valid JSON");
+    }
+
+    #[test]
+    fn parse_error_body_uses_rfc7807_detail_as_message() {
+        let (code, message) = parse_error_body(
+            br#"{"code":"authentication_failed","detail":"Forbidden","title":"Authentication failed"}"#,
+            401,
+        );
+        assert_eq!(code, "authentication_failed");
+        assert_eq!(message, "Forbidden");
+    }
+
+    #[test]
+    fn parse_error_body_falls_back_to_title_when_detail_absent() {
+        let (code, message) = parse_error_body(
+            br#"{"code":"forbidden","title":"Access denied"}"#,
+            403,
+        );
+        assert_eq!(code, "forbidden");
+        assert_eq!(message, "Access denied");
+    }
+
+    #[test]
+    fn parse_error_body_does_not_synthesise_api_error_prefix() {
+        let (_, message) = parse_error_body(br#"{"code":"THUMBNAILS_NOT_AVAILABLE"}"#, 403);
+        assert!(!message.contains("API error"), "message was {message}");
+        assert_eq!(message, "HTTP 403");
     }
 
     #[test]

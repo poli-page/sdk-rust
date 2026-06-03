@@ -42,7 +42,7 @@ pub mod blocking;
 
 pub use client::{PoliPage, PoliPageBuilder};
 pub use documents::Documents;
-pub use error::{error_codes, Error};
+pub use error::{error_codes, Error, ErrorPayload};
 pub use fs::render_to_file;
 pub use render::Render;
 pub use retry::RetryEvent;
