@@ -28,9 +28,13 @@ cargo add tokio --features macros,rt-multi-thread
 
 Requires Rust 1.93 or later. See [MSRV policy](#msrv) below.
 
-## Quick start (async)
+## Quick start
 
-### Project mode — render a published template by slug
+The SDK ships both an async client (default) and an optional blocking wrapper. Pick the one that matches your call site.
+
+### Async
+
+#### Project mode — render a published template by slug
 
 ```rust,no_run
 use poli_page::{PoliPage, ProjectModeInput};
@@ -52,7 +56,7 @@ let pdf = client.render.pdf(ProjectModeInput {
 
 Every Poli Page org comes pre-provisioned with a `getting-started/welcome` template, so the snippet above runs as-is the moment you have an API key — no project setup needed. For your own templates, swap the slugs once you've pushed a version with the `poli` CLI.
 
-### Preview inline HTML
+#### Preview inline HTML
 
 `render.preview` accepts raw HTML for live editing and visual inspection without producing a stored document.
 
@@ -73,7 +77,7 @@ println!("Rendered {} page(s) in {:?} mode", result.total_pages, result.environm
 
 **`render.pdf`, `render.pdf_stream`, and `render.document` require project mode** — `project` + `template`, optionally pinned to a specific `version` (omit to render the current draft). Inline HTML is only accepted by `render.preview`. The Rust type system enforces this at compile time — passing an `InlineModeInput` to `render.pdf` won't compile.
 
-### Write a PDF to disk
+#### Write a PDF to disk
 
 ```rust,no_run
 use poli_page::{PoliPage, ProjectModeInput};
@@ -97,7 +101,7 @@ poli_page::render_to_file(
 
 `render_to_file` streams response bytes directly to disk (bounded memory). It creates parent directories if missing and overwrites existing files.
 
-### Stream — for large PDFs or piping to S3 / HTTP responses
+#### Stream — for large PDFs or piping to S3 / HTTP responses
 
 ```rust,no_run
 use poli_page::{PoliPage, ProjectModeInput};
@@ -127,7 +131,7 @@ while let Some(chunk) = poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await 
 
 (Or `cargo add futures-util` and call `stream.next().await` if you'd rather not hand-roll `poll_fn`.)
 
-### Try it locally — runnable demo
+#### Try it locally — runnable demo
 
 ```bash
 cargo run --example demo
@@ -138,7 +142,7 @@ The demo exercises every public method against the real API:
 
 First run prompts for your `pp_test_*` key and saves it to `.env`. Subsequent runs are silent. Output PDFs/HTML are written to `examples/outputs/` (git-ignored). On Free-tier keys the thumbnails step soft-skips with a notice (the API returns `403 THUMBNAILS_NOT_AVAILABLE`); upgrade to Starter+ to exercise it.
 
-## Quick start (blocking)
+### Blocking
 
 For sync callers (short scripts, CLI tools, callers from a non-async host), opt into the `blocking` feature:
 
@@ -353,11 +357,9 @@ with `From` impls for both. Passing the wrong shape to a method is a **compile e
 
 Wire fields that are `string | null` in the API map to `Option<String>` in Rust. Forward-compatible enums (`PageFormat`, `Orientation`, `Environment`, `ThumbnailFormat`) carry a `#[serde(other)]` catch-all `Unknown` variant so a server-side addition is a silent no-op for old SDK versions.
 
-## MSRV
+## Concurrency & thread-safety
 
-Current MSRV: **Rust 1.93**.
-
-We track *current stable minus 2 minor releases* — the same cadence `tokio`, `reqwest`, and `serde` document. With Rust on a 6-week release cycle, that's a ~3-month window. MSRV bumps are MINOR releases with a clear note in [MIGRATION.md](MIGRATION.md).
+The client is `Send + Sync + Clone`. Share it across tasks by cloning — clones share the underlying connection pool — or wrap it in `Arc` if you prefer. Concurrent calls to `render` are independent; there is no per-request mutable state on the client itself.
 
 ## Runtime support
 
@@ -365,6 +367,12 @@ We track *current stable minus 2 minor releases* — the same cadence `tokio`, `
 - **Async-first** on the tokio runtime (default).
 - **Sync wrapper** via the `blocking` Cargo feature.
 - **TLS backend** defaults to `rustls` (pure Rust). Switch to system OpenSSL with `features = ["native-tls"]` if your environment needs it.
+
+## MSRV
+
+Current MSRV: **Rust 1.93**.
+
+We track *current stable minus 2 minor releases* — the same cadence `tokio`, `reqwest`, and `serde` document. With Rust on a 6-week release cycle, that's a ~3-month window. MSRV bumps are MINOR releases with a clear note in [MIGRATION.md](MIGRATION.md).
 
 ## Documentation & support
 
