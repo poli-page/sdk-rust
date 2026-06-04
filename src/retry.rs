@@ -20,6 +20,40 @@ pub struct RetryEvent {
     pub reason: Error,
 }
 
+/// Payload passed to the `on_request` hook just before each HTTP attempt is
+/// dispatched (including retries).
+///
+/// Mirrors Node's `RequestEvent` (`types.ts:171-175`). The `attempt` field is
+/// 1-based: the initial try is `1`, the first retry is `2`, etc. — matching
+/// Node `index.ts:186-190`.
+#[derive(Debug, Clone)]
+pub struct RequestEvent {
+    /// The HTTP method about to be issued (e.g. `"GET"`, `"POST"`, `"DELETE"`).
+    pub method: String,
+    /// The fully-resolved URL the request will hit, including the base URL.
+    pub url: String,
+    /// 1-based attempt counter. `1` is the initial try; `2..=max_retries+1`
+    /// are subsequent retries.
+    pub attempt: u32,
+}
+
+/// Payload passed to the `on_response` hook once a successful (2xx) response
+/// has been received and its body has been fully read.
+///
+/// Mirrors Node's `ResponseEvent` (`types.ts:177-181`).
+#[derive(Debug, Clone)]
+pub struct ResponseEvent {
+    /// HTTP status code (always in the 200..=299 range — the hook does not
+    /// fire for error responses; those go through `on_retry` / `on_error`).
+    pub status: u16,
+    /// `X-Request-Id` header value when the server provides one. None
+    /// otherwise.
+    pub request_id: Option<String>,
+    /// Wall-clock time in milliseconds between issuing the request and
+    /// finishing the body read.
+    pub duration_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,5 +107,41 @@ mod tests {
         } else {
             panic!("expected Connection");
         }
+    }
+
+    #[test]
+    fn request_event_carries_method_url_attempt() {
+        let evt = RequestEvent {
+            method: "POST".into(),
+            url: "https://api.poli.page/v1/render/document".into(),
+            attempt: 1,
+        };
+        let cloned = evt.clone();
+        assert_eq!(cloned.method, "POST");
+        assert_eq!(cloned.url, "https://api.poli.page/v1/render/document");
+        assert_eq!(cloned.attempt, 1);
+    }
+
+    #[test]
+    fn response_event_carries_status_request_id_duration() {
+        let evt = ResponseEvent {
+            status: 200,
+            request_id: Some("req_abc".into()),
+            duration_ms: 42,
+        };
+        let cloned = evt.clone();
+        assert_eq!(cloned.status, 200);
+        assert_eq!(cloned.request_id.as_deref(), Some("req_abc"));
+        assert_eq!(cloned.duration_ms, 42);
+    }
+
+    #[test]
+    fn response_event_request_id_is_optional() {
+        let evt = ResponseEvent {
+            status: 204,
+            request_id: None,
+            duration_ms: 0,
+        };
+        assert!(evt.request_id.is_none());
     }
 }
