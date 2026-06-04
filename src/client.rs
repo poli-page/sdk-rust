@@ -122,7 +122,7 @@ impl ClientInner {
                 tokio::time::sleep(delay).await;
             }
 
-            match self.send_once(&attempt, per_attempt_timeout).await {
+            match self.send_once(&attempt, per_attempt_timeout, attempt_idx + 1).await {
                 SendResult::Ok(resp) => return Ok(resp),
                 SendResult::Err {
                     error,
@@ -258,6 +258,7 @@ impl ClientInner {
         &self,
         attempt: &HttpAttempt<'_>,
         per_attempt_timeout: Duration,
+        attempt_idx_one_based: u32,
     ) -> SendResult {
         let url = match build_url(&self.config.base_url, attempt.path) {
             Ok(u) => u,
@@ -293,6 +294,16 @@ impl ClientInner {
             req = req.json(b);
         }
 
+        fire_request_hook(
+            self.on_request.as_ref(),
+            &RequestEvent {
+                method: attempt.method.to_string(),
+                url: url.to_string(),
+                attempt: attempt_idx_one_based,
+            },
+        );
+
+        let start = std::time::Instant::now();
         let send_fut = req.send();
         let response = match tokio::time::timeout(per_attempt_timeout, send_fut).await {
             Err(_elapsed) => {
@@ -336,6 +347,15 @@ impl ClientInner {
         };
 
         if (200..300).contains(&status) {
+            let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+            fire_response_hook(
+                self.on_response.as_ref(),
+                &ResponseEvent {
+                    status,
+                    request_id: request_id.clone(),
+                    duration_ms,
+                },
+            );
             debug!(status, "received response");
             return SendResult::Ok(ParsedResponse {
                 status,
@@ -461,6 +481,22 @@ fn fire_error_hook(hook: Option<&ErrorHook>, error: &Error) {
         let h = Arc::clone(h);
         let error = error.clone();
         let _ = catch_unwind(AssertUnwindSafe(move || h(&error)));
+    }
+}
+
+fn fire_request_hook(hook: Option<&RequestHook>, event: &RequestEvent) {
+    if let Some(h) = hook {
+        let h = Arc::clone(h);
+        let event = event.clone();
+        let _ = catch_unwind(AssertUnwindSafe(move || h(&event)));
+    }
+}
+
+fn fire_response_hook(hook: Option<&ResponseHook>, event: &ResponseEvent) {
+    if let Some(h) = hook {
+        let h = Arc::clone(h);
+        let event = event.clone();
+        let _ = catch_unwind(AssertUnwindSafe(move || h(&event)));
     }
 }
 
