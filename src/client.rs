@@ -254,6 +254,7 @@ impl Stream for PdfByteStream {
 }
 
 impl ClientInner {
+    #[allow(clippy::too_many_lines)]
     async fn send_once(
         &self,
         attempt: &HttpAttempt<'_>,
