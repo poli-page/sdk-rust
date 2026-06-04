@@ -24,8 +24,8 @@ use crate::internal::http::{
 };
 use crate::internal::uuid::new_v4_string;
 use crate::render::Render;
+use crate::{RequestEvent, ResponseEvent, RetryEvent};
 use crate::Error;
-use crate::RetryEvent;
 
 /// Resolved client options. Owned by `ClientInner` behind an `Arc` so cloning
 /// the public `PoliPage` is just a refcount bump.
@@ -41,6 +41,8 @@ pub(crate) struct ClientConfig {
 
 type RetryHook = Arc<dyn Fn(&RetryEvent) + Send + Sync>;
 type ErrorHook = Arc<dyn Fn(&Error) + Send + Sync>;
+type RequestHook = Arc<dyn Fn(&RequestEvent) + Send + Sync>;
+type ResponseHook = Arc<dyn Fn(&ResponseEvent) + Send + Sync>;
 
 /// Shared client state. Held by `Arc` in every public handle so cloning
 /// `PoliPage` (or any namespace handle) costs an atomic increment, not a
@@ -50,6 +52,8 @@ pub(crate) struct ClientInner {
     pub(crate) http: reqwest::Client,
     pub(crate) on_retry: Option<RetryHook>,
     pub(crate) on_error: Option<ErrorHook>,
+    pub(crate) on_request: Option<RequestHook>,
+    pub(crate) on_response: Option<ResponseHook>,
 }
 
 impl std::fmt::Debug for ClientInner {
@@ -59,6 +63,8 @@ impl std::fmt::Debug for ClientInner {
             // hooks are `dyn Fn` — not meaningfully Debug-formattable.
             .field("on_retry", &self.on_retry.as_ref().map(|_| "<fn>"))
             .field("on_error", &self.on_error.as_ref().map(|_| "<fn>"))
+            .field("on_request", &self.on_request.as_ref().map(|_| "<fn>"))
+            .field("on_response", &self.on_response.as_ref().map(|_| "<fn>"))
             .finish_non_exhaustive()
     }
 }
@@ -544,6 +550,8 @@ pub struct PoliPageBuilder {
     http_client: Option<reqwest::Client>,
     on_retry: Option<RetryHook>,
     on_error: Option<ErrorHook>,
+    on_request: Option<RequestHook>,
+    on_response: Option<ResponseHook>,
 }
 
 impl std::fmt::Debug for PoliPageBuilder {
@@ -560,6 +568,8 @@ impl std::fmt::Debug for PoliPageBuilder {
             )
             .field("on_retry", &self.on_retry.as_ref().map(|_| "<fn>"))
             .field("on_error", &self.on_error.as_ref().map(|_| "<fn>"))
+            .field("on_request", &self.on_request.as_ref().map(|_| "<fn>"))
+            .field("on_response", &self.on_response.as_ref().map(|_| "<fn>"))
             .finish()
     }
 }
@@ -660,6 +670,32 @@ impl PoliPageBuilder {
         self
     }
 
+    /// Register a callback fired immediately before each HTTP attempt is
+    /// dispatched (including retries). The hook receives the method, the
+    /// fully-resolved URL, and the 1-based attempt counter. Panics inside
+    /// the hook are swallowed.
+    #[must_use]
+    pub fn on_request<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&RequestEvent) + Send + Sync + 'static,
+    {
+        self.on_request = Some(Arc::new(f));
+        self
+    }
+
+    /// Register a callback fired once per successful (2xx) response, after
+    /// the body has been fully read. The hook receives the status code, the
+    /// `X-Request-Id` header (when present), and the wall-clock duration of
+    /// the attempt in milliseconds. Panics inside the hook are swallowed.
+    #[must_use]
+    pub fn on_response<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&ResponseEvent) + Send + Sync + 'static,
+    {
+        self.on_response = Some(Arc::new(f));
+        self
+    }
+
     /// Validate the configuration and construct a [`PoliPage`].
     ///
     /// # Errors
@@ -701,6 +737,8 @@ impl PoliPageBuilder {
             http,
             on_retry: self.on_retry,
             on_error: self.on_error,
+            on_request: self.on_request,
+            on_response: self.on_response,
         });
         Ok(PoliPage {
             render: Render::new(Arc::clone(&inner)),

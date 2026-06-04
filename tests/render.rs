@@ -960,3 +960,235 @@ fn project_input() -> ProjectModeInput {
 // Surface the import so unused-warning doesn't bite.
 #[allow(dead_code)]
 fn _ensure_document_descriptor_import_used(_: &DocumentDescriptor) {}
+
+// =============================================================================
+// Hook lifecycle tests (Tasks 3-6)
+// =============================================================================
+
+#[tokio::test]
+async fn on_request_setter_compiles_on_async_builder() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    let count = Arc::new(AtomicU32::new(0));
+    let c = Arc::clone(&count);
+    let _client = poli_page::PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url("https://api.poli.page")
+        .on_request(move |_evt: &poli_page::RequestEvent| {
+            c.fetch_add(1, Ordering::SeqCst);
+        })
+        .build()
+        .expect("build");
+    // We only assert the builder accepted the setter and `build()` succeeded
+    // — actual firing is covered in a later test.
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn on_request_fires_once_per_attempt_with_resolved_url() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    let server = MockServer::start().await;
+    // First two attempts 503, third 200 — gives us 3 total dispatches.
+    Mock::given(method("POST"))
+        .and(path("/v1/render/preview"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render/preview"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "html": "<p>ok</p>", "totalPages": 1, "environment": "sandbox"
+        })))
+        .mount(&server)
+        .await;
+
+    let events: Arc<Mutex<Vec<(String, String, u32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    let count = Arc::new(AtomicU32::new(0));
+    let c = Arc::clone(&count);
+    let client = PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url(server.uri())
+        .max_retries(2)
+        .retry_delay(Duration::from_millis(1))
+        .timeout(Duration::from_secs(2))
+        .on_request(move |evt| {
+            c.fetch_add(1, Ordering::SeqCst);
+            captured
+                .lock()
+                .unwrap()
+                .push((evt.method.clone(), evt.url.clone(), evt.attempt));
+        })
+        .build()
+        .expect("builder");
+
+    client
+        .render
+        .preview(ProjectModeInput {
+            project: "p".into(),
+            template: "t".into(),
+            version: Some("1.0.0".into()),
+            data: json!({}),
+            ..Default::default()
+        })
+        .await
+        .expect("eventual success");
+
+    assert_eq!(count.load(Ordering::SeqCst), 3, "fired once per attempt");
+    let evts = events.lock().unwrap();
+    assert_eq!(evts[0].0, "POST");
+    assert!(evts[0].1.ends_with("/v1/render/preview"), "url was {}", evts[0].1);
+    assert_eq!(evts[0].2, 1, "1-based attempt");
+    assert_eq!(evts[1].2, 2);
+    assert_eq!(evts[2].2, 3);
+}
+
+#[tokio::test]
+async fn on_response_fires_only_on_2xx_with_status_and_request_id() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    let server = MockServer::start().await;
+    // First call returns 503 (no on_response), second returns 200 with
+    // x-request-id (on_response should fire exactly once).
+    Mock::given(method("POST"))
+        .and(path("/v1/render/preview"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render/preview"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-request-id", "req_xyz")
+                .set_body_json(json!({
+                    "html": "<p>ok</p>", "totalPages": 1, "environment": "sandbox"
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let calls = Arc::new(AtomicU32::new(0));
+    let captured_status: Arc<Mutex<Option<u16>>> = Arc::new(Mutex::new(None));
+    let captured_rid: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let captured_dur: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+    let cc = Arc::clone(&calls);
+    let cs = Arc::clone(&captured_status);
+    let cr = Arc::clone(&captured_rid);
+    let cd = Arc::clone(&captured_dur);
+
+    let client = PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url(server.uri())
+        .max_retries(1)
+        .retry_delay(Duration::from_millis(1))
+        .timeout(Duration::from_secs(2))
+        .on_response(move |evt| {
+            cc.fetch_add(1, Ordering::SeqCst);
+            *cs.lock().unwrap() = Some(evt.status);
+            *cr.lock().unwrap() = evt.request_id.clone();
+            *cd.lock().unwrap() = Some(evt.duration_ms);
+        })
+        .build()
+        .expect("builder");
+
+    client
+        .render
+        .preview(ProjectModeInput {
+            project: "p".into(),
+            template: "t".into(),
+            version: Some("1.0.0".into()),
+            data: json!({}),
+            ..Default::default()
+        })
+        .await
+        .expect("ok");
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "fires once on success");
+    assert_eq!(*captured_status.lock().unwrap(), Some(200));
+    assert_eq!(captured_rid.lock().unwrap().as_deref(), Some("req_xyz"));
+    assert!(
+        captured_dur.lock().unwrap().is_some(),
+        "duration_ms should be populated"
+    );
+}
+
+#[tokio::test]
+async fn on_response_does_not_fire_on_terminal_error() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render/preview"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let calls = Arc::new(AtomicU32::new(0));
+    let c = Arc::clone(&calls);
+    let client = PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url(server.uri())
+        .max_retries(0)
+        .timeout(Duration::from_secs(2))
+        .on_response(move |_evt| {
+            c.fetch_add(1, Ordering::SeqCst);
+        })
+        .build()
+        .expect("builder");
+
+    let _ = client
+        .render
+        .preview(ProjectModeInput {
+            project: "p".into(),
+            template: "t".into(),
+            version: Some("1.0.0".into()),
+            data: json!({}),
+            ..Default::default()
+        })
+        .await
+        .expect_err("401");
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "must not fire on error");
+}
+
+#[tokio::test]
+async fn on_request_and_on_response_panics_do_not_break_the_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render/preview"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "html": "<p>x</p>", "totalPages": 1, "environment": "sandbox"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url(server.uri())
+        .max_retries(0)
+        .timeout(Duration::from_secs(2))
+        .on_request(|_evt| panic!("request hook boom"))
+        .on_response(|_evt| panic!("response hook boom"))
+        .build()
+        .expect("builder");
+
+    // Both hooks panic, but the request must still succeed.
+    let result = client
+        .render
+        .preview(ProjectModeInput {
+            project: "p".into(),
+            template: "t".into(),
+            version: Some("1.0.0".into()),
+            data: json!({}),
+            ..Default::default()
+        })
+        .await
+        .expect("hook panics must be swallowed");
+    assert_eq!(result.total_pages, 1);
+}
