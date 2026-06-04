@@ -45,7 +45,7 @@ pub use documents::Documents;
 pub use error::{error_codes, Error, ErrorPayload};
 pub use fs::render_to_file;
 pub use render::Render;
-pub use retry::RetryEvent;
+pub use retry::{RequestEvent, ResponseEvent, RetryEvent};
 pub use types::{
     DocumentDescriptor, DocumentPreviewResult, Environment, InlineModeInput, MetadataValue,
     Orientation, PageFormat, PreviewResult, ProjectModeInput, RenderInput, RenderMetadata,
