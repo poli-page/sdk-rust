@@ -106,7 +106,13 @@ impl Render {
     ///     data: json!({ "invoiceNumber": "INV-001" }),
     ///     ..Default::default()
     /// }).await?;
+    /// // The returned `bytes::Bytes` derefs to `[u8]`, so most APIs
+    /// // (`std::fs::write`, `Write::write_all`, hashers, …) accept it as-is.
     /// std::fs::write("invoice.pdf", &pdf)?;
+    /// // If you really need a `Vec<u8>` (e.g. to mutate the buffer or hand
+    /// // it to a sync API that demands ownership), use `.to_vec()`:
+    /// let owned: Vec<u8> = pdf.to_vec();
+    /// # let _ = owned;
     /// # Ok(()) }
     /// ```
     pub async fn pdf(&self, input: ProjectModeInput) -> Result<Bytes, Error> {
