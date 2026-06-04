@@ -3,7 +3,8 @@
 //! Method order mirrors the Node demo per spec §13 Phase 5:
 //! `render.pdf` → `render.pdf_stream` → `render_to_file` → `render.preview`
 //! → `render.document` → `documents.get` → `documents.thumbnails` →
-//! `documents.preview` → `documents.delete` → trigger an auth-error path.
+//! `documents.preview` → `documents.delete` → deliberately trigger
+//! `INVALID_VERSION_FORMAT` to exercise the typed-error path.
 //!
 //! API key resolution:
 //!   1. `POLI_PAGE_API_KEY` environment variable.
@@ -54,14 +55,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // ── 1. render.pdf ────────────────────────────────────────────────
-    step(1, 9, "render.pdf — buffer the full PDF into bytes");
+    step(1, 10, "render.pdf — buffer the full PDF into bytes");
     let pdf = client.render.pdf(input()).await?;
     let pdf_path = out_dir.join("render-pdf.pdf");
     fs::write(&pdf_path, &pdf)?;
     println!("  → {} bytes ({})", pdf.len(), pdf_path.display());
 
     // ── 2. render.pdf_stream ──────────────────────────────────────────
-    step(2, 9, "render.pdf_stream — async stream of chunks");
+    step(2, 10, "render.pdf_stream — async stream of chunks");
     let mut stream = std::pin::pin!(client.render.pdf_stream(input()).await?);
     let stream_path = out_dir.join("render-pdf-stream.pdf");
     let mut file = tokio::fs::File::create(&stream_path).await?;
@@ -83,14 +84,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  → {} bytes streamed ({})", total, stream_path.display(),);
 
     // ── 3. render_to_file ────────────────────────────────────────────
-    step(3, 9, "render_to_file — bounded-memory disk write");
+    step(3, 10, "render_to_file — bounded-memory disk write");
     let to_file_path = out_dir.join("render-to-file.pdf");
     poli_page::render_to_file(&client, input(), &to_file_path).await?;
     let written = fs::metadata(&to_file_path)?.len();
     println!("  → {} bytes ({})", written, to_file_path.display());
 
     // ── 4. render.preview ────────────────────────────────────────────
-    step(4, 9, "render.preview — paginated HTML preview");
+    step(4, 10, "render.preview — paginated HTML preview");
     let preview = client.render.preview(input()).await?;
     println!(
         "  → {} pages, environment={:?}, html.len={}",
@@ -100,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── 5. render.document ───────────────────────────────────────────
-    step(5, 9, "render.document — stored document descriptor");
+    step(5, 10, "render.document — stored document descriptor");
     let descriptor = client.render.document(input()).await?;
     println!(
         "  → document_id={} pages={} size={}b",
@@ -108,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── 6. documents.get ─────────────────────────────────────────────
-    step(6, 9, "documents.get — refresh descriptor + presigned URL");
+    step(6, 10, "documents.get — refresh descriptor + presigned URL");
     let fresh = client.documents.get(&descriptor.document_id).await?;
     println!("  → fresh presigned URL (expires {})", fresh.expires_at,);
 
@@ -116,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Tier-gated on the API side: Free tier returns 403
     // THUMBNAILS_NOT_AVAILABLE. Mirrors the Node SDK integration test
     // (tests/integration/documents.integration.test.ts:39-52).
-    step(7, 9, "documents.thumbnails — generate PNG thumbnails");
+    step(7, 10, "documents.thumbnails — generate PNG thumbnails");
     match client
         .documents
         .thumbnails(
@@ -145,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── 8. documents.preview ────────────────────────────────────────
-    step(8, 9, "documents.preview — stored paginated HTML");
+    step(8, 10, "documents.preview — stored paginated HTML");
     let stored_preview = client.documents.preview(&descriptor.document_id).await?;
     println!(
         "  → {} pages, html.len={}",
@@ -154,35 +155,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── 9. documents.delete ─────────────────────────────────────────
-    step(9, 9, "documents.delete — soft-delete the stored document");
+    step(9, 10, "documents.delete — soft-delete the stored document");
     client.documents.delete(&descriptor.document_id).await?;
     println!("  → ok (re-delete now returns Error::Gone)");
 
-    // ── Error-path demo ──────────────────────────────────────────────
+    // ── 10. error handling ──────────────────────────────────────────
+    // Deliberately send an invalid version string to make the API return
+    // 400 INVALID_VERSION_FORMAT. Mirrors step 10 in the Python/Go/Ruby
+    // demos — the SDK is *expected* to return Err here; the demo catches
+    // it and inspects the typed Error.
+    step(10, 10, "error handling — DEMO ONLY (we trigger an error on purpose)");
+    println!("  WARNING: This step is intentional — the SDK is about to return");
+    println!("  an error, but the demo will catch and inspect it. The demo is NOT crashing.");
+    println!("  (We send version=\"banana\", expecting 400 INVALID_VERSION_FORMAT.)");
     println!();
-    println!("─── Error path: building a client with a bad API key ───");
-    let bad_client = PoliPage::builder()
-        .api_key("pp_test_invalid_key_for_demo")
-        .base_url(
-            std::env::var("POLI_PAGE_BASE_URL")
-                .unwrap_or_else(|_| "https://api-develop.poli.page".to_string()),
-        )
-        .build()?;
-    match bad_client.render.preview(input()).await {
-        Ok(_) => println!("(unexpected: bad key worked)"),
+    let bad_input = ProjectModeInput {
+        project: DEFAULT_PROJECT.into(),
+        template: DEFAULT_TEMPLATE.into(),
+        version: Some("banana".into()),
+        data: json!({}),
+        ..Default::default()
+    };
+    match client.render.pdf(bad_input).await {
+        Ok(_) => println!("  unexpected: the call succeeded but should have failed"),
         Err(err) => {
-            println!("  code       = {}", err.code());
-            println!("  status     = {:?}", err.status());
-            println!("  request_id = {:?}", err.request_id());
-            println!("  is_auth    = {}", err.is_auth_error());
-            println!("  is_retry   = {}", err.is_retryable());
-            // Pattern-match: spec §3.3 shape.
+            println!("  caught — typed Error fields:");
+            println!("    code       = {}", err.code());
+            println!("    status     = {:?}", err.status());
+            println!("    request_id = {:?}", err.request_id());
+            println!("    is_auth    = {}", err.is_auth_error());
+            println!("    is_retry   = {}", err.is_retryable());
             match &err {
-                Error::Auth { code, .. } | Error::PermissionDenied { code, .. } => {
-                    println!("  matched Auth/PermissionDenied with code {code}");
+                Error::BadRequest { code, .. } => {
+                    println!("    matched Error::BadRequest with code {code}");
                 }
                 other => {
-                    println!("  matched other variant: {other:?}");
+                    println!("    matched other variant: {other:?}");
                 }
             }
         }
