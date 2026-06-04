@@ -192,3 +192,50 @@ fn blocking_client_is_clone() {
     let c2 = client.clone();
     let _ = c2.render.preview(input()).expect("clone-then-preview");
 }
+
+#[test]
+fn blocking_builder_accepts_on_request_setter() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    let (server, _rt) = mock_server();
+    let count = Arc::new(AtomicU32::new(0));
+    let c = Arc::clone(&count);
+    let client = poli_page::blocking::PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url(server.uri())
+        .max_retries(0)
+        .timeout(Duration::from_secs(2))
+        .on_request(move |_evt: &poli_page::RequestEvent| {
+            c.fetch_add(1, Ordering::SeqCst);
+        })
+        .build()
+        .expect("builder");
+
+    let _ = client.render.preview(input()).expect("preview");
+    assert_eq!(count.load(Ordering::SeqCst), 1, "fired once");
+}
+
+#[test]
+fn blocking_builder_accepts_on_response_setter() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    let (server, _rt) = mock_server();
+    let count = Arc::new(AtomicU32::new(0));
+    let c = Arc::clone(&count);
+    let client = poli_page::blocking::PoliPage::builder()
+        .api_key("pp_test_x")
+        .base_url(server.uri())
+        .max_retries(0)
+        .timeout(Duration::from_secs(2))
+        .on_response(move |evt: &poli_page::ResponseEvent| {
+            assert_eq!(evt.status, 200);
+            c.fetch_add(1, Ordering::SeqCst);
+        })
+        .build()
+        .expect("builder");
+
+    let _ = client.render.preview(input()).expect("preview");
+    assert_eq!(count.load(Ordering::SeqCst), 1, "fired once on success");
+}

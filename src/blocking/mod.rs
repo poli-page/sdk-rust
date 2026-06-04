@@ -16,7 +16,7 @@ use bytes::Bytes;
 use tokio::runtime::Runtime;
 
 use crate::Error;
-use crate::RetryEvent;
+use crate::{RequestEvent, ResponseEvent, RetryEvent};
 use crate::{
     DocumentDescriptor, DocumentPreviewResult, PreviewResult, ProjectModeInput, RenderInput,
     Thumbnail, ThumbnailOptions,
@@ -166,6 +166,28 @@ impl PoliPageBuilder {
         F: Fn(&Error) + Send + Sync + 'static,
     {
         self.inner = self.inner.on_error(f);
+        self
+    }
+
+    /// Register a callback fired immediately before each HTTP attempt.
+    /// Forwards to [`crate::PoliPageBuilder::on_request`].
+    #[must_use]
+    pub fn on_request<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&RequestEvent) + Send + Sync + 'static,
+    {
+        self.inner = self.inner.on_request(f);
+        self
+    }
+
+    /// Register a callback fired once per successful (2xx) response.
+    /// Forwards to [`crate::PoliPageBuilder::on_response`].
+    #[must_use]
+    pub fn on_response<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&ResponseEvent) + Send + Sync + 'static,
+    {
+        self.inner = self.inner.on_response(f);
         self
     }
 
