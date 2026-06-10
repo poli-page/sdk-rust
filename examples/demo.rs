@@ -31,12 +31,11 @@ const DEFAULT_VERSION: &str = "1.0.0";
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = resolve_api_key()?;
-    let base_url = std::env::var("POLI_PAGE_BASE_URL")
-        .unwrap_or_else(|_| "https://api-develop.poli.page".to_string());
-    let client = PoliPage::builder()
-        .api_key(api_key)
-        .base_url(base_url)
-        .build()?;
+    let mut builder = PoliPage::builder().api_key(api_key);
+    if let Ok(base_url) = std::env::var("POLI_PAGE_BASE_URL") {
+        builder = builder.base_url(base_url);
+    }
+    let client = builder.build()?;
 
     let out_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")

@@ -18,13 +18,11 @@ fn client() -> PoliPage {
         "POLI_PAGE_API_KEY must be set to run integration tests \
          (these only run with --features integration --ignored)",
     );
-    let base_url = env::var("POLI_PAGE_BASE_URL")
-        .unwrap_or_else(|_| "https://api-develop.poli.page".to_string());
-    PoliPage::builder()
-        .api_key(key)
-        .base_url(base_url)
-        .build()
-        .expect("builder")
+    let mut builder = PoliPage::builder().api_key(key);
+    if let Ok(base_url) = env::var("POLI_PAGE_TEST_BASE_URL") {
+        builder = builder.base_url(base_url);
+    }
+    builder.build().expect("builder")
 }
 
 #[tokio::test]

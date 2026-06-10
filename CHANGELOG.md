@@ -17,8 +17,8 @@ Breaking changes between major versions are summarized in [MIGRATION.md](MIGRATI
   own `timeout` still applies; consumers must depend on a compatible
   `reqwest` 0.12.x.
 - Nightly integration CI: `.github/workflows/integration.yml` runs the
-  `--features integration --ignored` suite against `api-develop.poli.page`
-  on a 06:00 UTC cron + push-to-main, scoped to the upstream repo so
+  `--features integration --ignored` suite against the live API on a
+  06:00 UTC cron + push-to-main, scoped to the upstream repo so
   fork PRs don't require the `POLI_PAGE_API_KEY` secret. Resolves the
   prior doc/CI mismatch with `CONTRIBUTING.md`.
 

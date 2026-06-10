@@ -1,8 +1,8 @@
 name: integration
 
-# Hits the deployed develop API. Kept out of the per-PR `CI` workflow so
+# Hits the live API. Kept out of the per-PR `CI` workflow so
 # (a) forks/contributors don't need a secret to land changes, and
-# (b) outages of `api-develop.poli.page` don't red-X every PR.
+# (b) upstream outages don't red-X every PR.
 #
 # Triggers:
 #   - schedule:        nightly at 06:00 UTC.
@@ -34,7 +34,7 @@ env:
 
 jobs:
   integration:
-    name: integration / develop API
+    name: integration / live API
     runs-on: ubuntu-latest
     # Skip on forks where the API-key secret isn't available.
     if: github.repository == 'poli-page/sdk-rust'
@@ -47,6 +47,7 @@ jobs:
       - name: cargo test (integration, --ignored)
         env:
           POLI_PAGE_API_KEY: ${{ secrets.POLI_PAGE_API_KEY }}
+          POLI_PAGE_TEST_BASE_URL: ${{ secrets.POLI_PAGE_TEST_BASE_URL }}
         run: |
           cargo test \
             --features integration \

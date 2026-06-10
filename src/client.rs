@@ -838,7 +838,7 @@ mod tests {
     fn builder_overrides_take_effect() {
         let client = PoliPage::builder()
             .api_key("pp_test_x")
-            .base_url("https://api-develop.poli.page")
+            .base_url("https://api.example.com")
             .max_retries(5)
             .retry_delay(Duration::from_millis(100))
             .timeout(Duration::from_secs(10))
@@ -849,7 +849,7 @@ mod tests {
         assert_eq!(client.inner.config.timeout, Duration::from_secs(10));
         assert_eq!(
             client.inner.config.base_url.as_str(),
-            "https://api-develop.poli.page/",
+            "https://api.example.com/",
         );
     }
 

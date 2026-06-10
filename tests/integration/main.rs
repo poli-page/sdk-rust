@@ -1,6 +1,5 @@
-//! End-to-end integration tests against the deployed `api-develop.poli.page`
-//! environment. **Not run in normal CI** — see spec §16.1:
-//! triggered only by the dedicated `.github/workflows/integration.yml`
+//! End-to-end integration tests against the live API. **Not run in normal
+//! CI** — triggered only by the dedicated `.github/workflows/integration.yml`
 //! nightly + push-to-main job, with `POLI_PAGE_API_KEY` injected as a secret.
 //!
 //! Local invocation:

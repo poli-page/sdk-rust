@@ -62,8 +62,8 @@ RUN_INTEGRATION=1 git push
 
 ## Integration tests
 
-Integration tests hit `https://api-develop.poli.page`. They're gated by
-both the `integration` Cargo feature **and** `--ignored`:
+Integration tests hit the live API. They're gated by both the
+`integration` Cargo feature **and** `--ignored`:
 
 ```bash
 export POLI_PAGE_API_KEY=pp_test_...
