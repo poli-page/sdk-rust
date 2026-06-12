@@ -372,7 +372,7 @@ async fn preview_honors_retry_after_header_on_429() {
         .api_key("pp_test_x")
         .base_url(server.uri())
         .max_retries(1)
-        .retry_delay(Duration::from_millis(50)) // would dominate wall-time if Retry-After ignored
+        .retry_delay(Duration::from_millis(500)) // would dominate wall-time if Retry-After ignored
         .timeout(Duration::from_secs(2))
         .on_retry(move |_evt| {
             rc.fetch_add(1, Ordering::SeqCst);
@@ -399,8 +399,9 @@ async fn preview_honors_retry_after_header_on_429() {
         "on_retry should fire once"
     );
     // Retry-After: 0 means almost no sleep — should finish much faster than
-    // retry_delay (50ms) would suggest.
-    assert!(elapsed < Duration::from_millis(40), "took {elapsed:?}");
+    // retry_delay (500ms) would suggest. 200ms gives slack for jitter on
+    // CI hosts running the suite alongside other workloads.
+    assert!(elapsed < Duration::from_millis(200), "took {elapsed:?}");
 }
 
 #[tokio::test]
