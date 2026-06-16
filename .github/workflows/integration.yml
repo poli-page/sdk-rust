@@ -48,7 +48,12 @@ jobs:
         env:
           POLI_PAGE_API_KEY: ${{ secrets.POLI_PAGE_API_KEY }}
           POLI_PAGE_TEST_BASE_URL: ${{ secrets.POLI_PAGE_TEST_BASE_URL }}
+        shell: bash
         run: |
+          if [ -z "$POLI_PAGE_API_KEY" ]; then
+            echo "POLI_PAGE_API_KEY secret not set — skipping integration tests"
+            exit 0
+          fi
           cargo test \
             --features integration \
             --test integration \
