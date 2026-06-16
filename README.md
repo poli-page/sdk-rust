@@ -1,7 +1,7 @@
 # Poli Page SDK for Rust
 
 [![crates.io](https://img.shields.io/crates/v/poli-page.svg)](https://crates.io/crates/poli-page)
-[![docs.rs](https://img.shields.io/docsrs/poli-page)](https://docs.rs/poli-page)
+[![docs](https://img.shields.io/badge/docs-online-brightgreen?style=flat)](https://poli-page.github.io/sdk-rust/)
 [![CI](https://github.com/poli-page/sdk-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/poli-page/sdk-rust/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/poli-page/sdk-rust/branch/main/graph/badge.svg)](https://codecov.io/gh/poli-page/sdk-rust)
 [![deps.rs](https://deps.rs/repo/github/poli-page/sdk-rust/status.svg)](https://deps.rs/repo/github/poli-page/sdk-rust)
