@@ -344,10 +344,8 @@ mod tests {
 
     #[test]
     fn parse_error_body_falls_back_to_title_when_detail_absent() {
-        let (code, message) = parse_error_body(
-            br#"{"code":"forbidden","title":"Access denied"}"#,
-            403,
-        );
+        let (code, message) =
+            parse_error_body(br#"{"code":"forbidden","title":"Access denied"}"#, 403);
         assert_eq!(code, "forbidden");
         assert_eq!(message, "Access denied");
     }

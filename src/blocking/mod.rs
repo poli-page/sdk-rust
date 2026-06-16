@@ -16,11 +16,11 @@ use bytes::Bytes;
 use tokio::runtime::Runtime;
 
 use crate::Error;
-use crate::{RequestEvent, ResponseEvent, RetryEvent};
 use crate::{
     DocumentDescriptor, DocumentPreviewResult, PreviewResult, ProjectModeInput, RenderInput,
     Thumbnail, ThumbnailOptions,
 };
+use crate::{RequestEvent, ResponseEvent, RetryEvent};
 
 pub mod fs;
 

@@ -1042,7 +1042,11 @@ async fn on_request_fires_once_per_attempt_with_resolved_url() {
     assert_eq!(count.load(Ordering::SeqCst), 3, "fired once per attempt");
     let evts = events.lock().unwrap();
     assert_eq!(evts[0].0, "POST");
-    assert!(evts[0].1.ends_with("/v1/render/preview"), "url was {}", evts[0].1);
+    assert!(
+        evts[0].1.ends_with("/v1/render/preview"),
+        "url was {}",
+        evts[0].1
+    );
     assert_eq!(evts[0].2, 1, "1-based attempt");
     assert_eq!(evts[1].2, 2);
     assert_eq!(evts[2].2, 3);

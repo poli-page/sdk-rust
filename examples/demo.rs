@@ -163,7 +163,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 400 INVALID_VERSION_FORMAT. Mirrors step 10 in the Python/Go/Ruby
     // demos — the SDK is *expected* to return Err here; the demo catches
     // it and inspects the typed Error.
-    step(10, 10, "error handling — DEMO ONLY (we trigger an error on purpose)");
+    step(
+        10,
+        10,
+        "error handling — DEMO ONLY (we trigger an error on purpose)",
+    );
     println!("  WARNING: This step is intentional — the SDK is about to return");
     println!("  an error, but the demo will catch and inspect it. The demo is NOT crashing.");
     println!("  (We send version=\"banana\", expecting 400 INVALID_VERSION_FORMAT.)");

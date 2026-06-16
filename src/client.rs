@@ -24,8 +24,8 @@ use crate::internal::http::{
 };
 use crate::internal::uuid::new_v4_string;
 use crate::render::Render;
-use crate::{RequestEvent, ResponseEvent, RetryEvent};
 use crate::Error;
+use crate::{RequestEvent, ResponseEvent, RetryEvent};
 
 /// Resolved client options. Owned by `ClientInner` behind an `Arc` so cloning
 /// the public `PoliPage` is just a refcount bump.
@@ -122,7 +122,10 @@ impl ClientInner {
                 tokio::time::sleep(delay).await;
             }
 
-            match self.send_once(&attempt, per_attempt_timeout, attempt_idx + 1).await {
+            match self
+                .send_once(&attempt, per_attempt_timeout, attempt_idx + 1)
+                .await
+            {
                 SendResult::Ok(resp) => return Ok(resp),
                 SendResult::Err {
                     error,
