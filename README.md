@@ -1,15 +1,15 @@
 # Poli Page SDK for Rust
 
-[![Crates.io](https://img.shields.io/crates/v/poli-page?style=flat&labelColor=334155&logo=rust&logoColor=ffffff&label=Crates.io)](https://crates.io/crates/poli-page)
-[![Downloads](https://img.shields.io/crates/d/poli-page?style=flat&labelColor=334155&logo=rust&logoColor=ffffff&label=Downloads)](https://crates.io/crates/poli-page)
-[![Ci](https://img.shields.io/github/actions/workflow/status/poli-page/sdk-rust/ci.yml?branch=main&style=flat&labelColor=334155&logo=githubactions&logoColor=ffffff&label=Ci)](https://github.com/poli-page/sdk-rust/actions/workflows/ci.yml)
-[![Codeql](https://img.shields.io/github/actions/workflow/status/poli-page/sdk-rust/codeql.yml?branch=main&style=flat&labelColor=334155&logo=github&logoColor=ffffff&label=Codeql)](https://github.com/poli-page/sdk-rust/actions/workflows/codeql.yml)
-[![Coverage](https://img.shields.io/codecov/c/github/poli-page/sdk-rust?style=flat&labelColor=334155&logo=codecov&logoColor=ffffff&label=Coverage)](https://codecov.io/gh/poli-page/sdk-rust)
-[![Msrv](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpoli-page%2Fsdk-rust%2Fmain%2FCargo.toml&query=%24.package.rust-version&prefix=v&style=flat&labelColor=334155&logo=rust&logoColor=ffffff&label=Msrv)](https://www.rust-lang.org/)
-[![Lint](https://img.shields.io/badge/Lint-clippy-blue?style=flat&labelColor=334155&logo=rust&logoColor=ffffff)](https://github.com/rust-lang/rust-clippy)
-[![Deps](https://img.shields.io/librariesio/release/cargo/poli-page?style=flat&labelColor=334155&logo=rust&logoColor=ffffff&label=Deps)](https://deps.rs/repo/github/poli-page/sdk-rust)
-[![Docs](https://img.shields.io/badge/Docs-online-brightgreen?style=flat&labelColor=334155&logo=readthedocs&logoColor=ffffff)](https://poli-page.github.io/sdk-rust/)
-[![License](https://img.shields.io/github/license/poli-page/sdk-rust?style=flat&labelColor=334155&logo=gnu&logoColor=ffffff&label=License)](LICENSE-MIT)
+[![Crates.io](https://img.shields.io/crates/v/poli-page?style=flat&logo=rust&logoColor=ffffff&label=Crates.io)](https://crates.io/crates/poli-page)
+[![Downloads](https://img.shields.io/crates/d/poli-page?style=flat&logo=rust&logoColor=ffffff&label=Downloads)](https://crates.io/crates/poli-page)
+[![Ci](https://img.shields.io/github/actions/workflow/status/poli-page/sdk-rust/ci.yml?branch=main&style=flat&logo=githubactions&logoColor=ffffff&label=Ci)](https://github.com/poli-page/sdk-rust/actions/workflows/ci.yml)
+[![Codeql](https://img.shields.io/github/actions/workflow/status/poli-page/sdk-rust/codeql.yml?branch=main&style=flat&logo=github&logoColor=ffffff&label=Codeql)](https://github.com/poli-page/sdk-rust/actions/workflows/codeql.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/poli-page/sdk-rust?style=flat&logo=codecov&logoColor=ffffff&label=Coverage)](https://codecov.io/gh/poli-page/sdk-rust)
+[![Msrv](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpoli-page%2Fsdk-rust%2Fmain%2FCargo.toml&query=%24.package.rust-version&prefix=v&style=flat&logo=rust&logoColor=ffffff&label=Msrv)](https://www.rust-lang.org/)
+[![Lint](https://img.shields.io/badge/Lint-clippy-blue?style=flat&logo=rust&logoColor=ffffff)](https://github.com/rust-lang/rust-clippy)
+[![Deps](https://deps.rs/repo/github/poli-page/sdk-rust/status.svg)](https://deps.rs/repo/github/poli-page/sdk-rust)
+[![Docs](https://img.shields.io/badge/Docs-online-brightgreen?style=flat&logo=readthedocs&logoColor=ffffff)](https://poli-page.github.io/sdk-rust/)
+[![License](https://img.shields.io/github/license/poli-page/sdk-rust?style=flat&logo=gnu&logoColor=ffffff&label=License)](LICENSE-MIT)
 
 Official Rust SDK for [Poli Page](https://poli.page) — render polished PDFs from HTML templates via the Poli Page API.
 
