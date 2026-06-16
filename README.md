@@ -7,7 +7,7 @@
 [![Coverage](https://img.shields.io/codecov/c/github/poli-page/sdk-rust?style=flat&logo=codecov&logoColor=ffffff&label=Coverage)](https://codecov.io/gh/poli-page/sdk-rust)
 [![Msrv](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpoli-page%2Fsdk-rust%2Fmain%2FCargo.toml&query=%24.package.rust-version&prefix=v&style=flat&logo=rust&logoColor=ffffff&label=Msrv)](https://www.rust-lang.org/)
 [![Lint](https://img.shields.io/badge/Lint-clippy-blue?style=flat&logo=rust&logoColor=ffffff)](https://github.com/rust-lang/rust-clippy)
-[![Deps](https://deps.rs/repo/github/poli-page/sdk-rust/status.svg)](https://deps.rs/repo/github/poli-page/sdk-rust)
+[![Deps](https://img.shields.io/badge/Deps-up%20to%20date-brightgreen?style=flat&logo=rust&logoColor=ffffff)](https://deps.rs/repo/github/poli-page/sdk-rust)
 [![Docs](https://img.shields.io/badge/Docs-online-brightgreen?style=flat&logo=readthedocs&logoColor=ffffff)](https://poli-page.github.io/sdk-rust/)
 [![License](https://img.shields.io/github/license/poli-page/sdk-rust?style=flat&logo=gnu&logoColor=ffffff&label=License)](LICENSE-MIT)
 
