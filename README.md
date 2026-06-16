@@ -3,6 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/poli-page.svg)](https://crates.io/crates/poli-page)
 [![docs](https://img.shields.io/badge/docs-online-brightgreen?style=flat)](https://poli-page.github.io/sdk-rust/)
 [![CI](https://github.com/poli-page/sdk-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/poli-page/sdk-rust/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/poli-page/sdk-rust/actions/workflows/codeql.yml/badge.svg)](https://github.com/poli-page/sdk-rust/actions/workflows/codeql.yml)
 [![codecov](https://codecov.io/gh/poli-page/sdk-rust/branch/main/graph/badge.svg)](https://codecov.io/gh/poli-page/sdk-rust)
 [![deps.rs](https://deps.rs/repo/github/poli-page/sdk-rust/status.svg)](https://deps.rs/repo/github/poli-page/sdk-rust)
 [![MSRV](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpoli-page%2Fsdk-rust%2Fmain%2FCargo.toml&query=%24.package.rust-version&label=MSRV&color=blue&prefix=v)](https://www.rust-lang.org/)

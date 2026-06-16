@@ -1,0 +1,42 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan against main so we still get findings on a quiet repo.
+    # Off-the-hour Monday slot — staggered from sdk-node (07:23) and
+    # sdk-ruby (06:17) to dodge GH Actions scheduler peaks.
+    - cron: "43 7 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+# All third-party Actions pinned to 40-char commit SHAs per spec §16.6
+# (supply-chain hardening); Dependabot bumps SHA + tag together.
+
+jobs:
+  analyze:
+    name: Analyze (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          languages: rust
+          # build-mode: none avoids invoking cargo — CodeQL parses sources
+          # directly. Works for Rust per GitHub's default-setup guidance and
+          # keeps the job fast on a single-crate workspace.
+          build-mode: none
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          category: "/language:rust"
