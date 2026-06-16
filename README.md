@@ -2,9 +2,9 @@
 
 [![Crates.io](https://img.shields.io/crates/v/poli-page?style=flat&labelColor=334155&logo=rust&logoColor=ffffff&label=Crates.io&color=0ea5e9)](https://crates.io/crates/poli-page)
 [![Downloads](https://img.shields.io/crates/d/poli-page?style=flat&labelColor=334155&logo=rust&logoColor=ffffff&label=Downloads&color=0ea5e9)](https://crates.io/crates/poli-page)
-[![Ci](https://img.shields.io/github/actions/workflow/status/poli-page/sdk-rust/ci.yml?branch=main&style=flat&labelColor=334155&logo=githubactions&logoColor=ffffff&label=Ci)](https://github.com/poli-page/sdk-rust/actions/workflows/ci.yml)
-[![Codeql](https://img.shields.io/github/actions/workflow/status/poli-page/sdk-rust/codeql.yml?branch=main&style=flat&labelColor=334155&logo=github&logoColor=ffffff&label=Codeql)](https://github.com/poli-page/sdk-rust/actions/workflows/codeql.yml)
-[![Coverage](https://img.shields.io/codecov/c/github/poli-page/sdk-rust?style=flat&labelColor=334155&logo=codecov&logoColor=ffffff&label=Coverage)](https://codecov.io/gh/poli-page/sdk-rust)
+[![Ci](https://img.shields.io/github/actions/workflow/status/poli-page/sdk-rust/ci.yml?branch=main&style=flat&labelColor=334155&logo=githubactions&logoColor=ffffff&label=Ci&color=059669)](https://github.com/poli-page/sdk-rust/actions/workflows/ci.yml)
+[![Codeql](https://img.shields.io/github/actions/workflow/status/poli-page/sdk-rust/codeql.yml?branch=main&style=flat&labelColor=334155&logo=github&logoColor=ffffff&label=Codeql&color=059669)](https://github.com/poli-page/sdk-rust/actions/workflows/codeql.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/poli-page/sdk-rust?style=flat&labelColor=334155&logo=codecov&logoColor=ffffff&label=Coverage&color=059669)](https://codecov.io/gh/poli-page/sdk-rust)
 [![Msrv](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpoli-page%2Fsdk-rust%2Fmain%2FCargo.toml&query=%24.package.rust-version&prefix=v&style=flat&labelColor=334155&logo=rust&logoColor=ffffff&label=Msrv&color=0ea5e9)](https://www.rust-lang.org/)
 [![Lint](https://img.shields.io/badge/Lint-clippy-0ea5e9?style=flat&labelColor=334155&logo=rust&logoColor=ffffff)](https://github.com/rust-lang/rust-clippy)
 [![Deps](https://img.shields.io/librariesio/release/cargo/poli-page?style=flat&labelColor=334155&logo=rust&logoColor=ffffff&label=Deps&color=0ea5e9)](https://deps.rs/repo/github/poli-page/sdk-rust)
