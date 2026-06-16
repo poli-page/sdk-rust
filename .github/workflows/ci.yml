@@ -57,6 +57,33 @@ jobs:
       # regression. See spec §16.1 step 9.
       - run: cargo build --locked --all-features
 
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    # Required by codecov-action's tokenless (OIDC) upload on public repos —
+    # avoids needing a CODECOV_TOKEN secret. Mirrors the sdk-node / sdk-ruby setup.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-05
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11
+        with:
+          tool: cargo-llvm-cov
+      - name: generate lcov coverage
+        run: cargo llvm-cov --all-features --workspace --locked --lcov --output-path lcov.info
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./lcov.info
+          use_oidc: true
+          fail_ci_if_error: false
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
