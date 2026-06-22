@@ -1,0 +1,181 @@
+name: Release
+
+# Tag-driven publish to crates.io via Trusted Publishing (OIDC) — no long-lived
+# token lives in this repo. Flow:
+#
+#   bump Cargo.toml + CHANGELOG on main → CI green → git tag vX.Y.Z → push tag
+#     → verify job (full gate, asserts tag == Cargo.toml version)
+#     → publish job PAUSES on the `crates-io-publish` environment for manual approval
+#     → on approval: OIDC token → cargo publish → GitHub Release
+#
+# The very first publish (0.9.0) was done manually with a token, because
+# crates.io has no "pending publisher" support — a crate must exist before
+# Trusted Publishing can be configured for it. From 0.9.1 onward this workflow
+# is the only publishing path.
+#
+# `workflow_dispatch` is a manual fallback: it creates and pushes the tag for
+# you (after the same verify gate + approval), instead of you pushing it.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish; MUST equal Cargo.toml (e.g. 0.9.1). The tag vX.Y.Z is created and pushed for you."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-05
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      # The tag is only the trigger — the version of record is Cargo.toml. Refuse
+      # to publish if they disagree, so a mistyped tag can never ship the wrong
+      # version to the immutable registry.
+      - name: Resolve version + assert tag matches Cargo.toml
+        id: resolve
+        run: |
+          set -euo pipefail
+          CRATE_VERSION="$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name=="poli-page") | .version')"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v${{ inputs.version }}"
+          fi
+          EXPECTED="v${CRATE_VERSION}"
+          if [[ "$TAG" != "$EXPECTED" ]]; then
+            echo "::error::Tag '$TAG' does not match Cargo.toml version ('$EXPECTED'). Bump Cargo.toml and re-tag." >&2
+            exit 1
+          fi
+          echo "version=${CRATE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${TAG} (Cargo.toml = ${CRATE_VERSION})"
+
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo doc --no-deps --all-features --locked
+      - run: cargo test --all-features --locked
+      - run: cargo test --no-default-features --features blocking --locked
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+        with:
+          # Scope to the default-feature graph, matching ci.yml (`native-tls` is
+          # an opt-in escape hatch; its openssl-sys pull-in is intentional).
+          arguments: ""
+      - name: cargo audit
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - run: cargo publish --dry-run --locked
+
+  publish:
+    name: publish
+    needs: verify
+    runs-on: ubuntu-latest
+    # Manual-approval gate: configure `crates-io-publish` in repo Settings →
+    # Environments with required reviewers. The job blocks here until approved.
+    environment: crates-io-publish
+    permissions:
+      contents: write   # create the tag (workflow_dispatch) + the GitHub Release
+      id-token: write   # OIDC exchange for Trusted Publishing
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-05
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      # workflow_dispatch path only: the tag doesn't exist yet, so create it.
+      # (For the tag-push path, the tag is already what triggered this run.)
+      - name: Create and push tag (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ needs.verify.outputs.tag }}"
+          git push origin "${{ needs.verify.outputs.tag }}"
+
+      # Idempotency: if this version is already on crates.io (e.g. a re-run, or
+      # the v0.9.0 bootstrap tag), skip the upload but still cut the Release.
+      - name: Check whether version is already published
+        id: published
+        run: |
+          set -euo pipefail
+          VER="${{ needs.verify.outputs.version }}"
+          CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H 'User-Agent: poli-page-release-workflow (github.com/poli-page/sdk-rust)' \
+            "https://crates.io/api/v1/crates/poli-page/${VER}")"
+          if [[ "$CODE" == "200" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "poli-page ${VER} is already on crates.io — will skip cargo publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "poli-page ${VER} not yet published (HTTP ${CODE}) — will publish."
+          fi
+
+      - name: Trusted Publishing auth (OIDC → short-lived crates.io token)
+        if: steps.published.outputs.exists == 'false'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: cargo publish
+        if: steps.published.outputs.exists == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
+
+      - name: Extract CHANGELOG section for release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          VER="${{ needs.verify.outputs.version }}"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          awk -v ver="$VER" '
+            $0 ~ ("^## \\[" ver "\\]") { cap = 1; next }
+            cap && /^## \[/             { exit }
+            cap                         { print }
+          ' CHANGELOG.md > "$NOTES"
+          if [[ ! -s "$NOTES" ]]; then
+            echo "_See [CHANGELOG.md](CHANGELOG.md) for details._" > "$NOTES"
+          fi
+          echo "file=$NOTES" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.verify.outputs.tag }}"
+          PRERELEASE=""
+          [[ "$TAG" == *-* ]] && PRERELEASE="--prerelease"   # vX.Y.Z-rc.N etc.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — skipping."
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file "${{ steps.notes.outputs.file }}" \
+              $PRERELEASE
+          fi

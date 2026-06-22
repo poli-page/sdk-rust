@@ -84,31 +84,41 @@ nightly with `POLI_PAGE_API_KEY` injected as a GitHub secret.
 
 ## Releases
 
-Releases are **manual**. There is no CI workflow that auto-publishes — by
-design (crates.io has no Trusted Publishing yet). The only supported
-publishing path is `scripts/release.sh`.
+Releases are **tag-driven**. Pushing a `vX.Y.Z` tag triggers
+`.github/workflows/release.yml`, which runs the full verify gate, pauses
+for a manual approval on the `crates-io-publish` environment, and then
+publishes to crates.io via **Trusted Publishing** (OIDC — no token is
+stored in the repo) and cuts the GitHub Release. `scripts/release.sh` is
+kept only as a local emergency fallback; the bootstrap of `0.9.0` (the
+first publish, which crates.io requires to be done by hand) is already
+behind us.
 
 1. Bump `version` in `Cargo.toml`.
-2. Move `[Unreleased]` → `[X.Y.Z] - YYYY-MM-DD` in `CHANGELOG.md`.
+2. Move `[Unreleased]` → `[X.Y.Z] - YYYY-MM-DD` in `CHANGELOG.md`. Keep the
+   heading exactly `## [X.Y.Z] - YYYY-MM-DD` — the workflow extracts that
+   section verbatim as the GitHub Release notes.
 3. If MAJOR, add a section to `MIGRATION.md`.
-4. Commit on `main`: `chore(release): vX.Y.Z`.
-5. From a clean main branch, run:
+4. Commit on `main`: `chore(release): vX.Y.Z`, push, and wait for `CI` to
+   go green (`gh run watch`).
+5. Tag the same version and push the tag:
    ```bash
-   ./scripts/release.sh
-   ./scripts/release.sh --dry-run   # everything except `cargo publish` and the tag push
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
    ```
-   The script runs pre-flight checks (clean tree, on `main`, tag doesn't
-   already exist), `cargo fmt --check`, `cargo clippy -D warnings`,
-   `cargo doc -D warnings`, `cargo test --all-features`, `cargo deny check`,
-   `cargo audit`, integration tests (if `POLI_PAGE_API_KEY` is set),
-   `cargo run --example demo` end-to-end, and `cargo publish --dry-run` —
-   then asks you to confirm before the actual publish + tag push.
-6. After publish + tag, visit `https://docs.rs/poli-page/<version>` to
-   confirm the rustdoc build succeeded (~5 minutes after publish).
+   The tag is only the trigger — the version of record is `Cargo.toml`. The
+   `verify` job refuses to publish if `vX.Y.Z` ≠ the `Cargo.toml` version,
+   so always bump-commit *then* tag.
+6. Watch the run (`gh run watch` or the Actions tab). After `verify`
+   passes, the `publish` job waits on the `crates-io-publish` environment
+   for **your approval** — click *Review deployments → Approve*. On
+   approval it publishes via OIDC and creates the Release.
+7. Confirm `https://docs.rs/poli-page/<version>` built (~5 minutes after
+   publish).
 
-You must be logged in to crates.io with a token scoped to the `poli-page`
-crate. The token lives in `~/.cargo/credentials.toml` on your machine and
-never enters CI.
+No crates.io token is needed for normal releases. Trusted Publishing is
+configured on the crate (repo `poli-page/sdk-rust`, workflow `release.yml`,
+environment `crates-io-publish`). A token in `~/.cargo/credentials.toml` is
+only needed for the local `scripts/release.sh` fallback.
 
 ### Stable vs. prerelease
 
@@ -123,12 +133,13 @@ To cut a prerelease:
 
 1. Set `version` in `Cargo.toml` to e.g. `2.0.0-rc.1`.
 2. Move CHANGELOG entries under `[2.0.0-rc.1] - YYYY-MM-DD`.
-3. Commit, run `./scripts/release.sh`, confirm at the prompt — crates.io
-   publishes it as a prerelease.
+3. Commit, push, then `git tag v2.0.0-rc.1 && git push origin v2.0.0-rc.1`.
+   The workflow detects the `-rc.1` suffix and marks the GitHub Release as a
+   prerelease; crates.io publishes it as a prerelease automatically.
 
 To promote to stable: bump version to the form without the suffix
-(`2.0.0`), move CHANGELOG entries to the stable heading, run
-`./scripts/release.sh` again.
+(`2.0.0`), move CHANGELOG entries to the stable heading, commit, and push
+tag `v2.0.0`.
 
 Stable and prerelease tags must never point at the same commit. Once a
 prerelease promotes, the next prerelease starts a new suffix sequence
