@@ -136,8 +136,11 @@ jobs:
             echo "poli-page ${VER} not yet published (HTTP ${CODE}) — will publish."
           fi
 
+      # Always run the OIDC exchange (even when the upload below is skipped),
+      # so an already-published tag like the v0.9.0 bootstrap still validates
+      # that Trusted Publishing is wired correctly. The minted token is
+      # short-lived and auto-revoked at job end whether or not it's used.
       - name: Trusted Publishing auth (OIDC → short-lived crates.io token)
-        if: steps.published.outputs.exists == 'false'
         id: auth
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
