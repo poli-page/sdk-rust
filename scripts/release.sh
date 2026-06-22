@@ -112,7 +112,7 @@ else
     warn "POLI_PAGE_API_KEY not set; skipping integration tests + demo smoke"
 fi
 
-cargo publish --dry-run --locked --allow-dirty=false
+cargo publish --dry-run --locked
 ok "cargo publish --dry-run"
 
 # ─── Confirm + Publish ───────────────────────────────────────────────────────
