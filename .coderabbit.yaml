@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit config for poli-page repos. PRs here are mostly opened and fixed by automated agents
+# (the poli-page auto loop and issue pipeline), which read CodeRabbit's findings and its commit status.
+language: en-US
+early_access: false
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  allow_author_approval: true
+  # The summary goes in the walkthrough, never in the PR description: the merge gate reads the description.
+  high_level_summary: false
+  high_level_summary_in_walkthrough: true
+  review_status: true
+  review_details: false
+  # The loop decides "reviewed this head" from the CodeRabbit commit status ("Review completed").
+  review_progress: true
+  commit_status: true
+  fail_commit_status: false
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  # PR labels are the closed issues' labels; CodeRabbit only suggests.
+  auto_apply_labels: false
+  suggested_reviewers: true
+  auto_assign_reviewers: false
+  in_progress_fortune: false
+  poem: false
+  enable_prompt_for_ai_agents: true
+  abort_on_close: true
+  disable_cache: false
+  slop_detection:
+    enabled: true
+    include_all_authors: false
+  auto_review:
+    enabled: true
+    drafts: false
+    # Every push of a fix round must be reviewed, and never auto-paused (the loop allows up to 5 rounds).
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+  path_filters:
+    - "!Cargo.lock"
+    - "!docs/package-lock.json"
+    - "!scripts/extract-api/package-lock.json"
+    - "!target/**"
+    - "!docs/dist/**"
+    - "!docs/.astro/**"
+    - "!docs/src/content/docs/reference/**"
+    - "!examples/outputs/**"
+  path_instructions:
+    - path: "src/**/*.rs"
+      instructions: >-
+        Public API must stay aligned with the other poli-page SDKs and the API spec; flag any
+        breaking change to public items without a major version bump (and a CHANGELOG/MIGRATION entry).
+        Errors must surface through the typed error enum in error.rs, mapping the API's
+        `{ error: { code } }` shape; no unwrap/expect/panic in library code. Code must pass
+        `clippy -D warnings` and stay within the MSRV (Rust 1.93).
+    - path: "src/internal/**"
+      instructions: >-
+        Internal helpers (HTTP, retry, URL, UUID) must stay out of the public API. Retries must only
+        happen on retryable statuses and network errors, respect Retry-After, and keep idempotency
+        keys stable across attempts. Never log or expose the API key.
+    - path: "src/blocking/**"
+      instructions: >-
+        The blocking wrapper is gated behind the `blocking` Cargo feature and must mirror the async
+        client's public methods and behavior exactly.
+    - path: "tests/**"
+      instructions: >-
+        Every public method needs tests, including error paths (wiremock for HTTP). Tests are written
+        test-first (TDD). Integration tests in tests/integration must stay opt-in and never contain
+        real API keys.
+    - path: "Cargo.toml"
+      instructions: >-
+        New dependencies must be justified, keep default features off where possible (reqwest uses
+        rustls), and stay compatible with MSRV 1.93. Cargo.lock must be updated with any change.
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CONTRIBUTING.md"
+      - "sdk-engineering-guide.md"
