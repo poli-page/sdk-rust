@@ -60,7 +60,7 @@ reviews:
         Public API must stay aligned with the other poli-page SDKs and the API spec; flag any
         breaking change to public items without a major version bump (and a CHANGELOG/MIGRATION entry).
         Errors must surface through the typed error enum in error.rs, mapping the API's
-        `{ error: { code } }` shape; no unwrap/expect/panic in library code. Code must pass
+        `{ error: CODE_STRING, detail?, issues? } (flat, API spec §4.1)` shape; no unwrap/expect/panic in library code. Code must pass
         `clippy -D warnings` and stay within the MSRV (Rust 1.93).
     - path: "src/internal/**"
       instructions: >-
