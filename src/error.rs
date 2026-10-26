@@ -815,16 +815,14 @@ mod tests {
         "VALIDATION_ERROR",
     ];
 
-    #[test]
-    fn error_codes_module_holds_exactly_the_contract_api_codes() {
-        // Read the constants from the source so a removed code that lingers,
-        // or a new code that is not in the contract, fails here.
-        let src = include_str!("error.rs");
+    /// `(name, value)` of every constant in the `error_codes` module of `src`, sorted.
+    fn error_code_constants(src: &str) -> Vec<(&str, &str)> {
         let start = src
             .find("pub mod error_codes {")
             .expect("error_codes module");
         let module = &src[start..];
-        let module = &module[..module.find("\n}\n").expect("module end")];
+        // The first column-0 `}` closes the module; `\n}` also matches CRLF.
+        let module = &module[..module.find("\n}").expect("module end")];
         let mut found: Vec<(&str, &str)> = module
             .lines()
             .filter_map(|line| line.trim().strip_prefix("pub const "))
@@ -834,6 +832,23 @@ mod tests {
             })
             .collect();
         found.sort_unstable();
+        found
+    }
+
+    #[test]
+    fn error_code_constants_reads_a_crlf_checkout() {
+        // A Windows checkout can turn the source into CRLF.
+        let lf = include_str!("error.rs").replace("\r\n", "\n");
+        let crlf = lf.replace('\n', "\r\n");
+        assert!(!error_code_constants(&lf).is_empty());
+        assert_eq!(error_code_constants(&crlf), error_code_constants(&lf));
+    }
+
+    #[test]
+    fn error_codes_module_holds_exactly_the_contract_api_codes() {
+        // Read the constants from the source so a removed code that lingers,
+        // or a new code that is not in the contract, fails here.
+        let found = error_code_constants(include_str!("error.rs"));
         for (name, value) in &found {
             assert_eq!(name, value, "constant {name} must equal its own name");
         }

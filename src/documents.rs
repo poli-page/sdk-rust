@@ -136,12 +136,18 @@ impl Documents {
         options: Option<ThumbnailOptions>,
     ) -> Result<Vec<Thumbnail>, Error> {
         let path = format!("{PATH_DOCUMENTS}/{}/thumbnails", encode_path_segment(id));
-        let options = serde_json::json!(options.unwrap_or_default());
+        let options = serde_json::to_value(options.unwrap_or_default()).map_err(|e| {
+            Error::InvalidOptions {
+                message: format!("could not serialize thumbnail options: {e}"),
+            }
+        })?;
         // Wire-body wrap: { "thumbnails": <options> }, or {} with no option set.
         let body = if options == serde_json::json!({}) {
             options
         } else {
-            serde_json::json!({ "thumbnails": options })
+            let mut body = serde_json::Map::new();
+            body.insert("thumbnails".to_owned(), options);
+            serde_json::Value::Object(body)
         };
         let idempotency_key = auto_idempotency_key();
         let attempt = HttpAttempt {

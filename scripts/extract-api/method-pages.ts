@@ -30,21 +30,21 @@ const METHODS: readonly MethodTarget[] = [
     slug: 'render-pdf',
     displayName: 'client.render.pdf',
     exampleFile: 'render-pdf.rs',
-    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'QUOTA_EXCEEDED', 'timeout', 'network_error', 'INTERNAL_ERROR'],
+    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'TEMPLATE_NOT_FOUND', 'QUOTA_EXCEEDED', 'timeout', 'network_error', 'INTERNAL_ERROR'],
     locate: (td) => findMethodOn(td, 'Render', 'pdf'),
   },
   {
     slug: 'render-pdf-stream',
     displayName: 'client.render.pdf_stream',
     exampleFile: 'render-pdf-stream.rs',
-    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'QUOTA_EXCEEDED', 'timeout', 'network_error', 'INTERNAL_ERROR'],
+    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'TEMPLATE_NOT_FOUND', 'QUOTA_EXCEEDED', 'timeout', 'network_error', 'INTERNAL_ERROR'],
     locate: (td) => findMethodOn(td, 'Render', 'pdf_stream'),
   },
   {
     slug: 'render-document',
     displayName: 'client.render.document',
     exampleFile: 'render-document.rs',
-    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'QUOTA_EXCEEDED', 'INTERNAL_ERROR'],
+    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'TEMPLATE_NOT_FOUND', 'QUOTA_EXCEEDED', 'INTERNAL_ERROR'],
     locate: (td) => findMethodOn(td, 'Render', 'document'),
   },
   {
@@ -79,7 +79,7 @@ const METHODS: readonly MethodTarget[] = [
     slug: 'render-to-file',
     displayName: 'render_to_file',
     exampleFile: 'render-to-file.rs',
-    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'QUOTA_EXCEEDED', 'timeout', 'network_error', 'INTERNAL_ERROR'],
+    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'TEMPLATE_NOT_FOUND', 'QUOTA_EXCEEDED', 'timeout', 'network_error', 'INTERNAL_ERROR'],
     locate: (td) => findTopLevelFunction(td, 'render_to_file'),
   },
 ];

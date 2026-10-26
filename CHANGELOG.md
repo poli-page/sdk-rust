@@ -14,27 +14,27 @@ authenticated preview and inline-HTML rendering.
 
 ### Removed
 
-- `render.preview` (async and `blocking`), `PreviewResult` and the
+- **BREAKING**: `render.preview` (async and `blocking`), `PreviewResult` and the
   `/v1/render/preview` path. `documents.preview(id)`
   (`GET /v1/documents/:id/preview`) stays.
-- `InlineModeInput` and the old `RenderInput` enum with its `From` impls.
-- The `version` input field and `DocumentDescriptor::version`. A render
+- **BREAKING**: `InlineModeInput` and the old `RenderInput` enum with its `From` impls.
+- **BREAKING**: The `version` input field and `DocumentDescriptor::version`. A render
   uses the project's copy published in the API key's environment.
-- The `Environment` enum.
-- Error codes `VERSION_NOT_FOUND`, `INVALID_VERSION_FORMAT`,
+- **BREAKING**: The `Environment` enum.
+- **BREAKING**: Error codes `VERSION_NOT_FOUND`, `INVALID_VERSION_FORMAT`,
   `VERSION_REQUIRED`, `INVALID_VERSION_FOR_KEY_ENV`,
   `MISSING_PROJECT_OR_TEMPLATE`, `GONE` (the API answers `410 DOCUMENT_GONE`)
   and `PAYMENT_REQUIRED` (payment grace is `403 ORGANIZATION_PAYMENT_GRACE`).
 
 ### Changed
 
-- `ProjectModeInput` is renamed `RenderInput` and is the only render input
+- **BREAKING**: `ProjectModeInput` is renamed `RenderInput` and is the only render input
   type. The `POST /v1/render` body holds only `project`, `template`, `data`,
   `metadata`, `format`, `orientation` and `locale`; unset optional fields
   are omitted.
-- `DocumentDescriptor::environment` is a `String`: any environment name the
+- **BREAKING**: `DocumentDescriptor::environment` is a `String`: any environment name the
   API returns (e.g. `staging`) is passed through unchanged.
-- `documents.thumbnails(id, options)` takes `Option<ThumbnailOptions>`
+- **BREAKING**: `documents.thumbnails(id, options)` takes `Option<ThumbnailOptions>`
   (async and `blocking`). Every option is optional: `ThumbnailOptions::width`
   is `Option<u32>`, `ThumbnailOptions` derives `Default`,
   `ThumbnailOptions::new()` takes no argument and `.width(n)` sets the
