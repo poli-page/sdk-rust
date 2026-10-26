@@ -9,7 +9,7 @@ use std::pin::Pin;
 use futures_core::Stream;
 use tokio::io::AsyncWriteExt;
 
-use crate::{Error, PoliPage, ProjectModeInput};
+use crate::{Error, PoliPage, RenderInput};
 
 /// Render a PDF and stream the bytes to the given path.
 ///
@@ -32,17 +32,16 @@ use crate::{Error, PoliPage, ProjectModeInput};
 /// # Example
 ///
 /// ```no_run
-/// use poli_page::{PoliPage, ProjectModeInput};
+/// use poli_page::{PoliPage, RenderInput};
 /// use serde_json::json;
 ///
 /// # async fn run() -> Result<(), poli_page::Error> {
-/// let client = PoliPage::new("pp_test_...")?;
+/// let client = PoliPage::new("pp_sandbox_...")?;
 /// poli_page::render_to_file(
 ///     &client,
-///     ProjectModeInput {
+///     RenderInput {
 ///         project: "billing".into(),
 ///         template: "invoice".into(),
-///         version: Some("1.0.0".into()),
 ///         data: json!({ "invoiceNumber": "INV-001" }),
 ///         ..Default::default()
 ///     },
@@ -52,7 +51,7 @@ use crate::{Error, PoliPage, ProjectModeInput};
 /// ```
 pub async fn render_to_file(
     client: &PoliPage,
-    input: ProjectModeInput,
+    input: RenderInput,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
     let path = path.as_ref();

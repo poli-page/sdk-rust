@@ -12,7 +12,6 @@ use std::time::Duration;
 
 // API paths
 pub(crate) const PATH_RENDER: &str = "/v1/render";
-pub(crate) const PATH_RENDER_PREVIEW: &str = "/v1/render/preview";
 
 /// Prefix for per-document endpoints — append `{id}` (URL-encoded) and
 /// optionally `/preview` or `/thumbnails`.

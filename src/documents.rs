@@ -49,7 +49,7 @@ impl Documents {
     /// ```no_run
     /// use poli_page::PoliPage;
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
+    /// let client = PoliPage::new("pp_sandbox_...")?;
     /// let doc = client.documents.get("doc_abc123").await?;
     /// let pdf = doc.download_pdf().await?;
     /// # let _ = pdf; Ok(()) }
@@ -65,8 +65,7 @@ impl Documents {
     ///
     /// The deployed API responds with `text/html` directly and exposes the
     /// page count via the `X-Document-Page-Count` header — the SDK assembles
-    /// the [`DocumentPreviewResult`] envelope here. The field is
-    /// `page_count`, **not** `total_pages` (which is render's preview field).
+    /// the [`DocumentPreviewResult`] envelope here.
     ///
     /// # Errors
     ///
@@ -77,7 +76,7 @@ impl Documents {
     /// ```no_run
     /// use poli_page::PoliPage;
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
+    /// let client = PoliPage::new("pp_sandbox_...")?;
     /// let preview = client.documents.preview("doc_abc123").await?;
     /// println!("{} pages: {}", preview.page_count, preview.html.len());
     /// # Ok(()) }
@@ -108,18 +107,23 @@ impl Documents {
 
     /// Generate page thumbnails for a stored document. Spec §6.3.
     /// POSTs `/v1/documents/:id/thumbnails` with the options wrapped under a
-    /// `thumbnails` key (a deployed-API quirk), then unwraps the server's
-    /// `{ thumbnails: [...] }` envelope and returns the array.
+    /// `thumbnails` key (a deployed-API quirk), or `{}` when no option is set
+    /// so every API default applies (width 400, JPEG). Options are not
+    /// range-checked here: the API answers `400 VALIDATION_ERROR`. Unwraps
+    /// the server's `{ thumbnails: [...] }` envelope and returns the array.
     ///
     /// # Example
     ///
     /// ```no_run
     /// use poli_page::{PoliPage, ThumbnailFormat, ThumbnailOptions};
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
+    /// let client = PoliPage::new("pp_sandbox_...")?;
+    /// // API defaults: 400 px wide JPEG.
+    /// let thumbs = client.documents.thumbnails("doc_abc123", None).await?;
+    /// // Or pick the options you need.
     /// let thumbs = client.documents.thumbnails(
     ///     "doc_abc123",
-    ///     ThumbnailOptions { width: 320, format: Some(ThumbnailFormat::Png), ..ThumbnailOptions::new(320) },
+    ///     Some(ThumbnailOptions { format: Some(ThumbnailFormat::Webp), ..ThumbnailOptions::new().width(320) }),
     /// ).await?;
     /// for t in &thumbs {
     ///     println!("page {} — {}×{}", t.page, t.width, t.height);
@@ -129,16 +133,21 @@ impl Documents {
     pub async fn thumbnails(
         &self,
         id: &str,
-        options: ThumbnailOptions,
+        options: Option<ThumbnailOptions>,
     ) -> Result<Vec<Thumbnail>, Error> {
         let path = format!("{PATH_DOCUMENTS}/{}/thumbnails", encode_path_segment(id));
-        // Wire-body wrap: { "thumbnails": <options> }
-        let wrapped = serde_json::json!({ "thumbnails": &options });
+        let options = serde_json::json!(options.unwrap_or_default());
+        // Wire-body wrap: { "thumbnails": <options> }, or {} with no option set.
+        let body = if options == serde_json::json!({}) {
+            options
+        } else {
+            serde_json::json!({ "thumbnails": options })
+        };
         let idempotency_key = auto_idempotency_key();
         let attempt = HttpAttempt {
             method: Method::POST,
             path: &path,
-            body: Some(&wrapped),
+            body: Some(&body),
             idempotency_key: Some(&idempotency_key),
             timeout: None,
         };
@@ -154,15 +163,15 @@ impl Documents {
     /// Soft-delete a stored document. The PDF is purged from storage;
     /// metadata is retained for audit. Spec §6.4. DELETE `/v1/documents/:id`.
     ///
-    /// Re-deleting an already-deleted document surfaces as [`Error::Gone`]
-    /// (HTTP 410) — there's no special handling here.
+    /// Idempotent: the API answers `204` for an already-deleted document
+    /// too, so a re-delete resolves with `Ok(())`.
     ///
     /// # Example
     ///
     /// ```no_run
     /// use poli_page::PoliPage;
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
+    /// let client = PoliPage::new("pp_sandbox_...")?;
     /// client.documents.delete("doc_abc123").await?;
     /// # Ok(()) }
     /// ```

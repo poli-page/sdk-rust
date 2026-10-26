@@ -1,28 +1,30 @@
 //! End-to-end wiremock coverage for the `render` namespace.
 //!
-//! Ports the renderPreview / renderPdf / renderDocument / renderPdfStream
-//! describe blocks from `sdk-node/tests/render.test.ts`. Uses `wiremock`
-//! (Rust's async-native HTTP mock) so the tests exercise the real `reqwest`
+//! Ports the renderPdf / renderDocument / renderPdfStream describe blocks
+//! from `sdk-node/tests/render.test.ts`. Uses `wiremock` (Rust's
+//! async-native HTTP mock) so the tests exercise the real `reqwest`
 //! transport, headers, body serialization, response parsing, and the
 //! two-hop second fetch against the "presigned" URL — only the network is
-//! faked.
+//! faked. Transport, header, hook and retry tests run against
+//! `POST /v1/render` through `render.document`.
 
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use poli_page::{
-    DocumentDescriptor, Environment, InlineModeInput, PageFormat, PoliPage, ProjectModeInput,
-};
+use poli_page::{DocumentDescriptor, Orientation, PageFormat, PoliPage, RenderInput};
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+/// Presigned URL for tests that never perform the second hop.
+const UNUSED_PDF_URL: &str = "https://nowhere.example/x.pdf";
 
 // `async` kept so every call site reads `build_client(...).await` symmetrically
 // with the namespace methods being tested — no real work happens inside.
 #[allow(clippy::unused_async)]
 async fn build_client(uri: String) -> PoliPage {
     PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(uri)
         // Keep retries fast so error-path tests don't dawdle.
         .max_retries(0)
@@ -33,115 +35,125 @@ async fn build_client(uri: String) -> PoliPage {
 }
 
 #[tokio::test]
-async fn preview_posts_to_v1_render_preview_and_parses_response() {
+async fn render_posts_to_v1_render_with_auth_and_json_headers() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .and(header("authorization", "Bearer pp_test_x"))
+        .and(path("/v1/render"))
+        .and(header("authorization", "Bearer pp_sandbox_x"))
         .and(header("content-type", "application/json"))
         .and(header("accept", "application/json"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>preview</p>",
-            "totalPages": 3,
-            "environment": "sandbox"
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
     let client = build_client(server.uri()).await;
     let result = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "billing".into(),
             template: "invoice".into(),
-            version: Some("1.0.0".into()),
             data: json!({ "x": 1 }),
             ..Default::default()
         })
         .await
-        .expect("preview");
+        .expect("document");
 
-    assert_eq!(result.html, "<p>preview</p>");
-    assert_eq!(result.total_pages, 3);
-    assert_eq!(result.environment, Environment::Sandbox);
+    assert_eq!(result.document_id, "doc_abc123");
+    assert_eq!(result.environment, "live");
 }
 
 #[tokio::test]
-async fn preview_serializes_project_body_with_camel_case_keys() {
+async fn render_body_holds_only_the_seven_documented_fields() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>x</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
+        .mount(&server)
+        .await;
+
+    let mut metadata = poli_page::RenderMetadata::new();
+    metadata.insert("customerId".into(), "cust_1".into());
+    let client = build_client(server.uri()).await;
+    client
+        .render
+        .document(RenderInput {
+            project: "billing".into(),
+            template: "invoice".into(),
+            data: json!({ "amount": 1280 }),
+            metadata: Some(metadata),
+            format: Some(PageFormat::A4),
+            orientation: Some(Orientation::Landscape),
+            locale: Some("fr-FR".into()),
+            idempotency_key: Some("idem-1".into()),
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect("document");
+
+    let req = &server.received_requests().await.expect("requests")[0];
+    let body: serde_json::Value = req.body_json().expect("json body");
+    assert_eq!(body["project"], "billing");
+    assert_eq!(body["template"], "invoice");
+    assert_eq!(body["data"]["amount"], 1280);
+    assert_eq!(body["format"], "A4");
+    assert_eq!(body["orientation"], "landscape");
+    assert_eq!(body["locale"], "fr-FR");
+    assert_eq!(body["metadata"]["customerId"], "cust_1");
+    let mut keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "data",
+            "format",
+            "locale",
+            "metadata",
+            "orientation",
+            "project",
+            "template"
+        ],
+    );
+}
+
+#[tokio::test]
+async fn render_body_omits_unset_optional_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
     let client = build_client(server.uri()).await;
     client
         .render
-        .preview(ProjectModeInput {
-            project: "billing".into(),
-            template: "invoice".into(),
-            version: Some("1.0.0".into()),
-            data: json!({ "amount": 1280 }),
-            ..Default::default()
-        })
+        .document(project_input())
         .await
-        .expect("preview");
+        .expect("document");
 
     let req = &server.received_requests().await.expect("requests")[0];
     let body: serde_json::Value = req.body_json().expect("json body");
-    assert_eq!(body["project"], "billing");
-    assert_eq!(body["template"], "invoice");
-    assert_eq!(body["version"], "1.0.0");
-    assert_eq!(body["data"]["amount"], 1280);
-    // Stripped fields never make the wire.
-    let obj = body.as_object().unwrap();
-    assert!(!obj.contains_key("idempotencyKey"));
-    assert!(!obj.contains_key("timeout"));
+    let mut keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["data", "project", "template"]);
 }
 
 #[tokio::test]
-async fn preview_accepts_inline_mode_input() {
+async fn render_forwards_metadata_in_request_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<h1>inline</h1>", "totalPages": 1, "environment": "sandbox"
-        })))
-        .mount(&server)
-        .await;
-
-    let client = build_client(server.uri()).await;
-    let result = client
-        .render
-        .preview(InlineModeInput {
-            template: "<h1>inline</h1>".into(),
-            data: json!({}),
-            ..Default::default()
-        })
-        .await
-        .expect("preview");
-    assert_eq!(result.html, "<h1>inline</h1>");
-
-    let req = &server.received_requests().await.expect("requests")[0];
-    let body: serde_json::Value = req.body_json().expect("json body");
-    assert_eq!(body["template"], "<h1>inline</h1>");
-    // Inline mode has no project / version on the wire.
-    let obj = body.as_object().unwrap();
-    assert!(!obj.contains_key("project"));
-    assert!(!obj.contains_key("version"));
-}
-
-#[tokio::test]
-async fn preview_forwards_metadata_in_request_body() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>x</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
@@ -151,16 +163,15 @@ async fn preview_forwards_metadata_in_request_body() {
     metadata.insert("amount".into(), 1280i64.into());
     client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             metadata: Some(metadata),
             ..Default::default()
         })
         .await
-        .expect("preview");
+        .expect("document");
 
     let req = &server.received_requests().await.expect("requests")[0];
     let body: serde_json::Value = req.body_json().expect("json body");
@@ -169,28 +180,25 @@ async fn preview_forwards_metadata_in_request_body() {
 }
 
 #[tokio::test]
-async fn preview_sends_auto_generated_idempotency_key_for_post() {
+async fn render_sends_auto_generated_idempotency_key_for_post() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>x</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
     let client = build_client(server.uri()).await;
     client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
         .await
-        .expect("preview");
+        .expect("document");
 
     let req = &server.received_requests().await.expect("requests")[0];
     let idem = req
@@ -202,29 +210,26 @@ async fn preview_sends_auto_generated_idempotency_key_for_post() {
 }
 
 #[tokio::test]
-async fn preview_honors_caller_supplied_idempotency_key() {
+async fn render_honors_caller_supplied_idempotency_key() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>x</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
     let client = build_client(server.uri()).await;
     client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             idempotency_key: Some("idem-caller-supplied".into()),
             ..Default::default()
         })
         .await
-        .expect("preview");
+        .expect("document");
 
     let req = &server.received_requests().await.expect("requests")[0];
     let idem = req.headers.get("idempotency-key").unwrap();
@@ -232,10 +237,10 @@ async fn preview_honors_caller_supplied_idempotency_key() {
 }
 
 #[tokio::test]
-async fn preview_surfaces_validation_error_from_400_response() {
+async fn render_surfaces_validation_error_from_400_response() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(
             ResponseTemplate::new(400).set_body_json(
                 json!({ "code": "VALIDATION_ERROR", "message": "data is required" }),
@@ -247,10 +252,9 @@ async fn preview_surfaces_validation_error_from_400_response() {
     let client = build_client(server.uri()).await;
     let err = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -263,26 +267,24 @@ async fn preview_surfaces_validation_error_from_400_response() {
 }
 
 #[tokio::test]
-async fn preview_retries_on_503_then_succeeds() {
+async fn render_retries_on_503_then_succeeds() {
     let server = MockServer::start().await;
     // First call: 503; second call: 200. Mock.up_to_n_times scopes the response.
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(ResponseTemplate::new(503).set_body_string("transient"))
         .up_to_n_times(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>ok</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
     // Use a client that DOES retry — overriding the helper's max_retries=0.
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(1)
         .retry_delay(Duration::from_millis(1))
@@ -292,24 +294,23 @@ async fn preview_retries_on_503_then_succeeds() {
 
     let result = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
         .await
         .expect("retry should have produced success");
-    assert_eq!(result.html, "<p>ok</p>");
+    assert_eq!(result.document_id, "doc_abc123");
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
-async fn preview_does_not_retry_401_auth_error() {
+async fn render_does_not_retry_401_auth_error() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(
             ResponseTemplate::new(401)
                 .set_body_json(json!({ "code": "INVALID_API_KEY", "message": "nope" })),
@@ -318,7 +319,7 @@ async fn preview_does_not_retry_401_auth_error() {
         .await;
 
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(3) // would retry if 401 were retryable
         .retry_delay(Duration::from_millis(1))
@@ -328,10 +329,9 @@ async fn preview_does_not_retry_401_auth_error() {
 
     let err = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -343,13 +343,13 @@ async fn preview_does_not_retry_401_auth_error() {
 }
 
 #[tokio::test]
-async fn preview_honors_retry_after_header_on_429() {
+async fn render_honors_retry_after_header_on_429() {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(
             ResponseTemplate::new(429)
                 .insert_header("retry-after", "0")
@@ -359,17 +359,15 @@ async fn preview_honors_retry_after_header_on_429() {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>x</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
     let retry_count = Arc::new(AtomicU32::new(0));
     let rc = Arc::clone(&retry_count);
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(1)
         .retry_delay(Duration::from_millis(500)) // would dominate wall-time if Retry-After ignored
@@ -383,10 +381,9 @@ async fn preview_honors_retry_after_header_on_429() {
     let start = std::time::Instant::now();
     client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -405,13 +402,13 @@ async fn preview_honors_retry_after_header_on_429() {
 }
 
 #[tokio::test]
-async fn preview_fires_on_error_when_retries_exhausted() {
+async fn render_fires_on_error_when_retries_exhausted() {
     use std::sync::Arc;
     use std::sync::Mutex;
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(ResponseTemplate::new(503))
         .mount(&server)
         .await;
@@ -419,7 +416,7 @@ async fn preview_fires_on_error_when_retries_exhausted() {
     let last_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured = Arc::clone(&last_error);
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(2)
         .retry_delay(Duration::from_millis(1))
@@ -432,10 +429,9 @@ async fn preview_fires_on_error_when_retries_exhausted() {
 
     let _ = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -451,18 +447,16 @@ async fn preview_fires_on_error_when_retries_exhausted() {
 
 /// Helper: assert custom hooks never panic the call site even when they themselves panic.
 #[tokio::test]
-async fn preview_hook_panic_does_not_break_the_request() {
+async fn render_hook_panic_does_not_break_the_request() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>x</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(0)
         .retry_delay(Duration::from_millis(1))
@@ -474,10 +468,9 @@ async fn preview_hook_panic_does_not_break_the_request() {
     // Hook isn't fired on success — but compile-time we want this to typecheck.
     let _ = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -487,12 +480,12 @@ async fn preview_hook_panic_does_not_break_the_request() {
     // Now make on_error fire by triggering a non-retryable error.
     let server2 = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(ResponseTemplate::new(401))
         .mount(&server2)
         .await;
     let client2 = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server2.uri())
         .max_retries(0)
         .timeout(Duration::from_secs(2))
@@ -502,10 +495,9 @@ async fn preview_hook_panic_does_not_break_the_request() {
 
     let err = client2
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -535,7 +527,6 @@ fn descriptor_wire(presigned_url: &str) -> serde_json::Value {
         "projectSlug": "billing",
         "templateId": "tpl_invoice_v1",
         "templateSlug": "invoice",
-        "version": "1.0.0",
         "environment": "live",
         "apiKeyId": "key_live_abc",
         "format": "A4",
@@ -565,10 +556,9 @@ async fn render_document_posts_to_v1_render_and_returns_parsed_descriptor() {
     let client = build_client(server.uri()).await;
     let doc = client
         .render
-        .document(ProjectModeInput {
+        .document(RenderInput {
             project: "billing".into(),
             template: "invoice".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -579,7 +569,7 @@ async fn render_document_posts_to_v1_render_and_returns_parsed_descriptor() {
     assert_eq!(doc.template_slug.as_deref(), Some("invoice"));
     assert_eq!(doc.page_count, 2);
     assert_eq!(doc.format, PageFormat::A4);
-    assert_eq!(doc.environment, Environment::Live);
+    assert_eq!(doc.environment, "live");
     assert_eq!(doc.presigned_pdf_url, presigned);
 
     // The request landed on /v1/render with the project body.
@@ -712,10 +702,9 @@ async fn render_pdf_strips_idempotency_and_timeout_from_render_body() {
     let client = build_client(server.uri()).await;
     client
         .render
-        .pdf(ProjectModeInput {
+        .pdf(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             idempotency_key: Some("idem-caller-supplied".into()),
             timeout: Some(Duration::from_secs(5)),
@@ -783,7 +772,7 @@ async fn render_pdf_does_not_retry_second_hop_failure() {
         .await;
 
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(5) // would retry ~6x for a 5xx if the policy applied
         .retry_delay(Duration::from_millis(1))
@@ -864,48 +853,6 @@ async fn render_pdf_stream_surfaces_download_failed_on_presigned_410() {
     assert_eq!(err.status(), Some(410));
 }
 
-#[tokio::test]
-async fn render_pdf_inline_input_does_not_compile_typecheck() {
-    // This test exists for its compile-time signal: render.pdf statically
-    // requires ProjectModeInput. The line below is a structural sanity check
-    // that we can construct a ProjectModeInput and pass it — paired with the
-    // doc-text in §9.1 about InlineModeInput being un-typeable here.
-    let server = MockServer::start().await;
-    let presigned = format!("{}/presigned/x.pdf", server.uri());
-    Mock::given(method("POST"))
-        .and(path("/v1/render"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/presigned/x.pdf"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(PDF_STUB))
-        .mount(&server)
-        .await;
-    let client = build_client(server.uri()).await;
-    let _bytes = client
-        .render
-        .pdf(ProjectModeInput {
-            project: "p".into(),
-            template: "t".into(),
-            version: Some("1.0.0".into()),
-            data: json!({}),
-            ..Default::default()
-        })
-        .await
-        .expect("pdf");
-    // Asserting on type only: this MUST fail to compile if uncommented.
-    //   let _ = client.render.pdf(InlineModeInput { ... }).await;
-    //
-    // (We can't put a compile-fail assertion here without `trybuild`, which
-    // is a Phase 6 deliverable.)
-    let _ = InlineModeInput {
-        template: "<p/>".into(),
-        data: json!({}),
-        ..Default::default()
-    };
-}
-
 /// Proves `PoliPageBuilder::http_client` is actually used for requests:
 /// the injected client carries a default header the SDK never sets; the
 /// mock only matches when that header is present on the wire.
@@ -913,13 +860,9 @@ async fn render_pdf_inline_input_does_not_compile_typecheck() {
 async fn render_uses_injected_http_client() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .and(header("x-sdk-test-marker", "injected-client"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>p</p>",
-            "totalPages": 1,
-            "environment": "sandbox"
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
@@ -934,7 +877,7 @@ async fn render_uses_injected_http_client() {
         .expect("custom client builds");
 
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(0)
         .http_client(injected)
@@ -943,16 +886,15 @@ async fn render_uses_injected_http_client() {
 
     client
         .render
-        .preview(project_input())
+        .document(project_input())
         .await
-        .expect("preview");
+        .expect("document");
 }
 
-fn project_input() -> ProjectModeInput {
-    ProjectModeInput {
+fn project_input() -> RenderInput {
+    RenderInput {
         project: "p".into(),
         template: "t".into(),
-        version: Some("1.0.0".into()),
         data: json!({}),
         ..Default::default()
     }
@@ -974,7 +916,7 @@ async fn on_request_setter_compiles_on_async_builder() {
     let count = Arc::new(AtomicU32::new(0));
     let c = Arc::clone(&count);
     let _client = poli_page::PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url("https://api.poli.page")
         .on_request(move |_evt: &poli_page::RequestEvent| {
             c.fetch_add(1, Ordering::SeqCst);
@@ -994,16 +936,14 @@ async fn on_request_fires_once_per_attempt_with_resolved_url() {
     let server = MockServer::start().await;
     // First two attempts 503, third 200 — gives us 3 total dispatches.
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(ResponseTemplate::new(503))
         .up_to_n_times(2)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>ok</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
@@ -1012,7 +952,7 @@ async fn on_request_fires_once_per_attempt_with_resolved_url() {
     let count = Arc::new(AtomicU32::new(0));
     let c = Arc::clone(&count);
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(2)
         .retry_delay(Duration::from_millis(1))
@@ -1029,10 +969,9 @@ async fn on_request_fires_once_per_attempt_with_resolved_url() {
 
     client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -1042,11 +981,7 @@ async fn on_request_fires_once_per_attempt_with_resolved_url() {
     assert_eq!(count.load(Ordering::SeqCst), 3, "fired once per attempt");
     let evts = events.lock().unwrap();
     assert_eq!(evts[0].0, "POST");
-    assert!(
-        evts[0].1.ends_with("/v1/render/preview"),
-        "url was {}",
-        evts[0].1
-    );
+    assert!(evts[0].1.ends_with("/v1/render"), "url was {}", evts[0].1);
     assert_eq!(evts[0].2, 1, "1-based attempt");
     assert_eq!(evts[1].2, 2);
     assert_eq!(evts[2].2, 3);
@@ -1061,19 +996,17 @@ async fn on_response_fires_only_on_2xx_with_status_and_request_id() {
     // First call returns 503 (no on_response), second returns 200 with
     // x-request-id (on_response should fire exactly once).
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(ResponseTemplate::new(503))
         .up_to_n_times(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("x-request-id", "req_xyz")
-                .set_body_json(json!({
-                    "html": "<p>ok</p>", "totalPages": 1, "environment": "sandbox"
-                })),
+                .set_body_json(descriptor_wire(UNUSED_PDF_URL)),
         )
         .mount(&server)
         .await;
@@ -1088,7 +1021,7 @@ async fn on_response_fires_only_on_2xx_with_status_and_request_id() {
     let cd = Arc::clone(&captured_dur);
 
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(1)
         .retry_delay(Duration::from_millis(1))
@@ -1104,10 +1037,9 @@ async fn on_response_fires_only_on_2xx_with_status_and_request_id() {
 
     client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -1130,7 +1062,7 @@ async fn on_response_does_not_fire_on_terminal_error() {
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
+        .and(path("/v1/render"))
         .respond_with(ResponseTemplate::new(401))
         .mount(&server)
         .await;
@@ -1138,7 +1070,7 @@ async fn on_response_does_not_fire_on_terminal_error() {
     let calls = Arc::new(AtomicU32::new(0));
     let c = Arc::clone(&calls);
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(0)
         .timeout(Duration::from_secs(2))
@@ -1150,10 +1082,9 @@ async fn on_response_does_not_fire_on_terminal_error() {
 
     let _ = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
@@ -1166,15 +1097,13 @@ async fn on_response_does_not_fire_on_terminal_error() {
 async fn on_request_and_on_response_panics_do_not_break_the_request() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/render/preview"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "html": "<p>x</p>", "totalPages": 1, "environment": "sandbox"
-        })))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
         .mount(&server)
         .await;
 
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(0)
         .timeout(Duration::from_secs(2))
@@ -1186,14 +1115,182 @@ async fn on_request_and_on_response_panics_do_not_break_the_request() {
     // Both hooks panic, but the request must still succeed.
     let result = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project: "p".into(),
             template: "t".into(),
-            version: Some("1.0.0".into()),
             data: json!({}),
             ..Default::default()
         })
         .await
         .expect("hook panics must be swallowed");
-    assert_eq!(result.total_pages, 1);
+    assert_eq!(result.document_id, "doc_abc123");
+}
+
+// =============================================================================
+// Environments contract: error codes, publish lock, open environment names
+// =============================================================================
+
+#[tokio::test]
+async fn render_surfaces_template_not_found_code_and_detail_from_404() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+            "error": "TEMPLATE_NOT_FOUND",
+            "detail": "Template 'invoice' is not published in this environment.",
+            "requestId": "req_404"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let err = client
+        .render
+        .document(project_input())
+        .await
+        .expect_err("404");
+
+    assert!(matches!(err, poli_page::Error::NotFound { .. }), "{err:?}");
+    assert_eq!(err.code(), poli_page::error_codes::TEMPLATE_NOT_FOUND);
+    assert_eq!(err.status(), Some(404));
+    assert_eq!(
+        err.to_payload().message,
+        "Template 'invoice' is not published in this environment.",
+    );
+}
+
+#[tokio::test]
+async fn render_passes_an_unknown_error_code_through_verbatim() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "error": "SOME_FUTURE_CODE",
+            "detail": "something new"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let err = client
+        .render
+        .document(project_input())
+        .await
+        .expect_err("409");
+
+    assert_eq!(err.code(), "SOME_FUTURE_CODE");
+    assert_eq!(err.status(), Some(409));
+    assert_eq!(err.to_payload().message, "something new");
+}
+
+fn publish_in_progress() -> ResponseTemplate {
+    ResponseTemplate::new(503)
+        .insert_header("retry-after", "1")
+        .set_body_json(json!({
+            "error": "PUBLISH_IN_PROGRESS",
+            "detail": "A publish is in progress for this project."
+        }))
+}
+
+#[tokio::test]
+async fn render_retries_publish_in_progress_after_retry_after_delay() {
+    use std::sync::{Arc, Mutex};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(publish_in_progress())
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(UNUSED_PDF_URL)))
+        .mount(&server)
+        .await;
+
+    let retries: Arc<Mutex<Vec<(Duration, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&retries);
+    let client = PoliPage::builder()
+        .api_key("pp_sandbox_x")
+        .base_url(server.uri())
+        .retry_delay(Duration::from_millis(1))
+        .timeout(Duration::from_secs(5))
+        .on_retry(move |evt| {
+            captured
+                .lock()
+                .unwrap()
+                .push((evt.delay, evt.reason.code().to_string()));
+        })
+        .build()
+        .expect("builder");
+
+    let start = std::time::Instant::now();
+    let doc = client
+        .render
+        .document(project_input())
+        .await
+        .expect("retry should have succeeded");
+    let elapsed = start.elapsed();
+
+    assert_eq!(doc.document_id, "doc_abc123");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    assert_eq!(
+        *retries.lock().unwrap(),
+        vec![(Duration::from_secs(1), "PUBLISH_IN_PROGRESS".to_string())],
+    );
+    assert!(elapsed >= Duration::from_secs(1), "took {elapsed:?}");
+}
+
+#[tokio::test]
+async fn render_surfaces_publish_in_progress_once_retries_are_exhausted() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(publish_in_progress())
+        .mount(&server)
+        .await;
+
+    let client = PoliPage::builder()
+        .api_key("pp_sandbox_x")
+        .base_url(server.uri())
+        .retry_delay(Duration::from_millis(1))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("builder");
+
+    let start = std::time::Instant::now();
+    let err = client
+        .render
+        .document(project_input())
+        .await
+        .expect_err("exhausted retries");
+    let elapsed = start.elapsed();
+
+    assert_eq!(err.code(), poli_page::error_codes::PUBLISH_IN_PROGRESS);
+    assert_eq!(err.status(), Some(503));
+    assert!(err.is_retryable());
+    // Default policy: initial attempt + 2 retries, each after Retry-After: 1.
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    assert!(elapsed >= Duration::from_secs(2), "took {elapsed:?}");
+}
+
+#[tokio::test]
+async fn render_document_passes_any_environment_name_through() {
+    let server = MockServer::start().await;
+    let mut wire = descriptor_wire(UNUSED_PDF_URL);
+    wire["environment"] = json!("staging");
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(wire))
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).await;
+    let doc = client
+        .render
+        .document(project_input())
+        .await
+        .expect("document");
+    assert_eq!(doc.environment, "staging");
 }

@@ -1,4 +1,4 @@
-//! The `render` namespace — `client.render.{preview, pdf, pdf_stream, document}`.
+//! The `render` namespace — `client.render.{pdf, pdf_stream, document}`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +8,7 @@ use http::Method;
 
 use crate::client::{auto_idempotency_key, ClientInner, HttpAttempt, PdfByteStream};
 use crate::types::document::attach_client;
-use crate::{DocumentDescriptor, Error, PreviewResult, ProjectModeInput, RenderInput};
+use crate::{DocumentDescriptor, Error, RenderInput};
 
 /// The `client.render` namespace. Cheap to clone — internally an
 /// `Arc<ClientInner>`.
@@ -29,57 +29,6 @@ impl Render {
         Self { inner }
     }
 
-    /// Generate paginated HTML preview output for a render.
-    ///
-    /// Accepts both [`ProjectModeInput`] (resolved by project + template slug)
-    /// and [`crate::InlineModeInput`] (raw HTML in `template`) via
-    /// `impl Into<RenderInput>` — `render.preview(project_input).await` and
-    /// `render.preview(inline_input).await` both compile.
-    ///
-    /// POSTs to `/v1/render/preview`. Returns the parsed [`PreviewResult`]
-    /// (`html`, `total_pages`, `environment`).
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::BadRequest`] when the API rejects the input shape
-    ///   (e.g. missing `data`).
-    /// - [`Error::Auth`] / [`Error::PermissionDenied`] on credential issues.
-    /// - [`Error::RateLimited`] when the tenant exceeds its quota.
-    /// - [`Error::Api`] for any other 4xx/5xx after retries are exhausted.
-    /// - [`Error::Connection`] / [`Error::Timeout`] for network failures.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use poli_page::{InlineModeInput, PoliPage};
-    /// use serde_json::json;
-    ///
-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
-    /// let result = client.render.preview(InlineModeInput {
-    ///     template: "<h1>Hello {{ name }}</h1>".into(),
-    ///     data: json!({ "name": "World" }),
-    ///     ..Default::default()
-    /// }).await?;
-    /// println!("{} page(s)", result.total_pages);
-    /// # Ok(()) }
-    /// ```
-    pub async fn preview(&self, input: impl Into<RenderInput>) -> Result<PreviewResult, Error> {
-        let input = input.into();
-        let idempotency_key = input
-            .idempotency_key()
-            .map_or_else(auto_idempotency_key, str::to_owned);
-        let timeout_override = input.timeout();
-        execute_post_json(
-            &self.inner,
-            "/v1/render/preview",
-            &input,
-            Some(&idempotency_key),
-            timeout_override,
-        )
-        .await
-    }
-
     /// Render a PDF and return it as raw bytes. Two HTTP calls under the
     /// hood: `POST /v1/render` to produce a stored document, then `GET`
     /// against the descriptor's `presigned_pdf_url` to fetch the bytes.
@@ -94,15 +43,14 @@ impl Render {
     /// # Example
     ///
     /// ```no_run
-    /// use poli_page::{PoliPage, ProjectModeInput};
+    /// use poli_page::{PoliPage, RenderInput};
     /// use serde_json::json;
     ///
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
-    /// let pdf = client.render.pdf(ProjectModeInput {
+    /// let client = PoliPage::new("pp_sandbox_...")?;
+    /// let pdf = client.render.pdf(RenderInput {
     ///     project: "billing".into(),
     ///     template: "invoice".into(),
-    ///     version: Some("1.0.0".into()),
     ///     data: json!({ "invoiceNumber": "INV-001" }),
     ///     ..Default::default()
     /// }).await?;
@@ -115,7 +63,7 @@ impl Render {
     /// # let _ = owned;
     /// # Ok(()) }
     /// ```
-    pub async fn pdf(&self, input: ProjectModeInput) -> Result<Bytes, Error> {
+    pub async fn pdf(&self, input: RenderInput) -> Result<Bytes, Error> {
         let descriptor = self.document(input).await?;
         descriptor.download_pdf().await
     }
@@ -142,18 +90,17 @@ impl Render {
     /// # Example
     ///
     /// ```no_run
-    /// use poli_page::{PoliPage, ProjectModeInput};
+    /// use poli_page::{PoliPage, RenderInput};
     /// use serde_json::json;
     /// use std::future::poll_fn;
     /// use std::pin::Pin;
     /// use futures_core::Stream;
     ///
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
-    /// let mut stream = std::pin::pin!(client.render.pdf_stream(ProjectModeInput {
+    /// let client = PoliPage::new("pp_sandbox_...")?;
+    /// let mut stream = std::pin::pin!(client.render.pdf_stream(RenderInput {
     ///     project: "billing".into(),
     ///     template: "invoice".into(),
-    ///     version: Some("1.0.0".into()),
     ///     data: json!({}),
     ///     ..Default::default()
     /// }).await?);
@@ -163,7 +110,7 @@ impl Render {
     /// }
     /// # Ok(()) }
     /// ```
-    pub async fn pdf_stream(&self, input: ProjectModeInput) -> Result<PdfByteStream, Error> {
+    pub async fn pdf_stream(&self, input: RenderInput) -> Result<PdfByteStream, Error> {
         let descriptor = self.document(input).await?;
         self.inner.stream_bytes(&descriptor.presigned_pdf_url).await
     }
@@ -180,23 +127,26 @@ impl Render {
     ///
     /// - [`Error::BadRequest`] when the input shape is invalid.
     /// - [`Error::Auth`] / [`Error::PermissionDenied`] on credential issues.
+    /// - [`Error::NotFound`] when the project or template is not published in
+    ///   the API key's environment (`PROJECT_NOT_FOUND`,
+    ///   `PROJECT_NOT_IN_ENVIRONMENT`, `TEMPLATE_NOT_FOUND`).
     /// - [`Error::RateLimited`] when the tenant exceeds its quota.
-    /// - [`Error::Api`] for any other 4xx/5xx after retries are exhausted.
+    /// - [`Error::Api`] for any other 4xx/5xx after retries are exhausted —
+    ///   e.g. `503 PUBLISH_IN_PROGRESS` while a publish holds the project.
     /// - [`Error::Internal`] when the response body fails to parse as a
     ///   `DocumentDescriptor`.
     ///
     /// # Example
     ///
     /// ```no_run
-    /// use poli_page::{PoliPage, ProjectModeInput};
+    /// use poli_page::{PoliPage, RenderInput};
     /// use serde_json::json;
     ///
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
-    /// let doc = client.render.document(ProjectModeInput {
+    /// let client = PoliPage::new("pp_sandbox_...")?;
+    /// let doc = client.render.document(RenderInput {
     ///     project: "billing".into(),
     ///     template: "invoice".into(),
-    ///     version: Some("1.0.0".into()),
     ///     data: json!({}),
     ///     ..Default::default()
     /// }).await?;
@@ -204,7 +154,7 @@ impl Render {
     /// let pdf = doc.download_pdf().await?;
     /// # let _ = pdf; Ok(()) }
     /// ```
-    pub async fn document(&self, input: ProjectModeInput) -> Result<DocumentDescriptor, Error> {
+    pub async fn document(&self, input: RenderInput) -> Result<DocumentDescriptor, Error> {
         let idempotency_key = input
             .idempotency_key
             .clone()

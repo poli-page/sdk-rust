@@ -4,33 +4,38 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Output image format for thumbnails. Defaults to PNG on the server when the
+/// Output image format for thumbnails. The API defaults to JPEG when the
 /// caller omits the field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThumbnailFormat {
-    /// PNG — lossless. Larger files, suitable for crisp UI thumbnails.
-    Png,
     /// JPEG — lossy. Smaller files; `quality` (1-100) tunes the trade-off.
     Jpeg,
+    /// WebP — compact, supported by every current browser.
+    Webp,
+    /// PNG — lossless. Larger files, suitable for crisp UI thumbnails.
+    Png,
     /// Catch-all for forward-compat (spec §9.2).
     #[serde(other)]
     Unknown,
 }
 
-/// Options accepted by [`crate::Documents::thumbnails`].
-#[derive(Debug, Clone, Serialize)]
+/// Options accepted by [`crate::Documents::thumbnails`]. Every option is
+/// optional; an unset option is not sent and the API default applies. The
+/// SDK does not check bounds: out-of-range values get `400 VALIDATION_ERROR`
+/// from the API.
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThumbnailOptions {
-    /// Thumbnail width in pixels. Required by the API.
-    pub width: u32,
+    /// Thumbnail width in pixels (50-2000). API default: 400.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
 
-    /// Output image format. Server default: PNG.
+    /// Output image format. API default: [`ThumbnailFormat::Jpeg`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<ThumbnailFormat>,
 
-    /// JPEG quality (1-100). Only valid when `format` is [`ThumbnailFormat::Jpeg`];
-    /// ignored otherwise.
+    /// JPEG quality (1-100). Only valid when `format` is [`ThumbnailFormat::Jpeg`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<u8>,
 
@@ -41,21 +46,23 @@ pub struct ThumbnailOptions {
 }
 
 impl ThumbnailOptions {
-    /// Minimal constructor — most callers only set `width`.
+    /// Options with nothing set — every API default applies.
     ///
     /// ```
     /// use poli_page::ThumbnailOptions;
-    /// let opts = ThumbnailOptions::new(840);
-    /// assert_eq!(opts.width, 840);
+    /// let opts = ThumbnailOptions::new().width(840);
+    /// assert_eq!(opts.width, Some(840));
     /// ```
     #[must_use]
-    pub fn new(width: u32) -> Self {
-        Self {
-            width,
-            format: None,
-            quality: None,
-            pages: None,
-        }
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the thumbnail width in pixels.
+    #[must_use]
+    pub fn width(mut self, width: u32) -> Self {
+        self.width = Some(width);
+        self
     }
 }
 
@@ -81,18 +88,21 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn options_serializes_only_required_field_by_default() {
-        let opts = ThumbnailOptions::new(840);
-        let wire = serde_json::to_value(&opts).unwrap();
-        let obj = wire.as_object().unwrap();
-        assert_eq!(wire["width"], 840);
-        assert_eq!(obj.len(), 1, "unexpected fields: {wire}");
+    fn options_serialize_to_an_empty_object_by_default() {
+        let wire = serde_json::to_value(ThumbnailOptions::new()).unwrap();
+        assert_eq!(wire, json!({}));
+    }
+
+    #[test]
+    fn width_builder_sets_only_width() {
+        let wire = serde_json::to_value(ThumbnailOptions::new().width(840)).unwrap();
+        assert_eq!(wire, json!({ "width": 840 }));
     }
 
     #[test]
     fn options_serializes_all_fields_when_set() {
         let opts = ThumbnailOptions {
-            width: 320,
+            width: Some(320),
             format: Some(ThumbnailFormat::Jpeg),
             quality: Some(85),
             pages: Some(vec![1, 2, 3]),
@@ -107,8 +117,9 @@ mod tests {
     #[test]
     fn format_round_trips_through_serde() {
         for (input, json) in [
-            (ThumbnailFormat::Png, r#""png""#),
             (ThumbnailFormat::Jpeg, r#""jpeg""#),
+            (ThumbnailFormat::Webp, r#""webp""#),
+            (ThumbnailFormat::Png, r#""png""#),
         ] {
             assert_eq!(serde_json::to_string(&input).unwrap(), json);
             let back: ThumbnailFormat = serde_json::from_str(json).unwrap();
@@ -118,7 +129,7 @@ mod tests {
 
     #[test]
     fn format_deserializes_unknown_as_catch_all() {
-        let v: ThumbnailFormat = serde_json::from_str(r#""webp""#).unwrap();
+        let v: ThumbnailFormat = serde_json::from_str(r#""avif""#).unwrap();
         assert_eq!(v, ThumbnailFormat::Unknown);
     }
 

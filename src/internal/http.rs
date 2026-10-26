@@ -69,10 +69,10 @@ pub(crate) fn compute_backoff_with_jitter(
 
 /// Parse a non-2xx response body into a `(code, message)` pair.
 ///
-/// Mirrors the Node SDK's fallback chain `code → message → error →
-/// "unknown_error"` (see `src/internal/http.ts:42-58`). Bodies that aren't
-/// valid JSON (HTML error pages, empty responses) collapse to
-/// `INTERNAL_ERROR` with a status-bearing message.
+/// The code is the body's `code`, else its `error`, else `"unknown_error"`
+/// (the API's error body is `{ error, detail?, issues?, requestId }`).
+/// Bodies that aren't valid JSON (HTML error pages, empty responses)
+/// collapse to `INTERNAL_ERROR` with a status-bearing message.
 pub(crate) fn parse_error_body(body: &[u8], status: u16) -> (String, String) {
     #[derive(serde::Deserialize)]
     struct ErrorBody {
@@ -319,6 +319,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_error_body_reads_api_error_shape_with_detail() {
+        let body = br#"{"error":"TEMPLATE_NOT_FOUND","detail":"Template 'invoice' not found.","requestId":"req_1"}"#;
+        let (code, message) = parse_error_body(body, 404);
+        assert_eq!(code, "TEMPLATE_NOT_FOUND");
+        assert_eq!(message, "Template 'invoice' not found.");
+    }
+
+    #[test]
+    fn parse_error_body_passes_an_unknown_code_through_verbatim() {
+        let (code, _) = parse_error_body(br#"{"error":"SOME_FUTURE_CODE"}"#, 409);
+        assert_eq!(code, "SOME_FUTURE_CODE");
+    }
+
+    #[test]
     fn parse_error_body_returns_unknown_error_when_json_has_no_recognised_fields() {
         let (code, message) = parse_error_body(b"{}", 400);
         assert_eq!(code, "unknown_error");
@@ -385,22 +399,22 @@ mod tests {
 
     #[test]
     fn build_headers_always_sets_accept_application_json() {
-        let h = build_headers(&Method::POST, "pp_test_x", Some("idem-1"), UA);
+        let h = build_headers(&Method::POST, "pp_sandbox_x", Some("idem-1"), UA);
         assert_eq!(get(&h, header::ACCEPT).unwrap(), "application/json");
     }
 
     #[test]
     fn build_headers_post_sets_content_type_application_json() {
-        let h = build_headers(&Method::POST, "pp_test_x", Some("idem-1"), UA);
+        let h = build_headers(&Method::POST, "pp_sandbox_x", Some("idem-1"), UA);
         assert_eq!(get(&h, header::CONTENT_TYPE).unwrap(), "application/json");
     }
 
     #[test]
     fn build_headers_sets_authorization_with_bearer_prefix() {
-        let h = build_headers(&Method::POST, "pp_test_xyz", Some("idem-1"), UA);
+        let h = build_headers(&Method::POST, "pp_sandbox_xyz", Some("idem-1"), UA);
         assert_eq!(
             get(&h, header::AUTHORIZATION).unwrap(),
-            "Bearer pp_test_xyz"
+            "Bearer pp_sandbox_xyz"
         );
     }
 
@@ -408,7 +422,7 @@ mod tests {
     fn build_headers_sets_user_agent_verbatim() {
         let h = build_headers(
             &Method::POST,
-            "pp_test_x",
+            "pp_sandbox_x",
             Some("idem-1"),
             "custom-ua/9.9.9",
         );
@@ -417,24 +431,27 @@ mod tests {
 
     #[test]
     fn build_headers_sets_idempotency_key_from_arg_when_post() {
-        let h = build_headers(&Method::POST, "pp_test_x", Some("idem-abc-123"), UA);
+        let h = build_headers(&Method::POST, "pp_sandbox_x", Some("idem-abc-123"), UA);
         assert_eq!(get(&h, HEADER_IDEMPOTENCY_KEY).unwrap(), "idem-abc-123");
     }
 
     #[test]
     fn build_headers_get_omits_content_type_and_idempotency_key() {
-        let h = build_headers(&Method::GET, "pp_test_x", None, UA);
+        let h = build_headers(&Method::GET, "pp_sandbox_x", None, UA);
         assert!(get(&h, header::CONTENT_TYPE).is_none());
         assert!(get(&h, HEADER_IDEMPOTENCY_KEY).is_none());
         // auth + UA + Accept still present
-        assert_eq!(get(&h, header::AUTHORIZATION).unwrap(), "Bearer pp_test_x");
+        assert_eq!(
+            get(&h, header::AUTHORIZATION).unwrap(),
+            "Bearer pp_sandbox_x"
+        );
         assert_eq!(get(&h, header::USER_AGENT).unwrap(), UA);
         assert_eq!(get(&h, header::ACCEPT).unwrap(), "application/json");
     }
 
     #[test]
     fn build_headers_delete_omits_content_type_and_idempotency_key() {
-        let h = build_headers(&Method::DELETE, "pp_test_x", None, UA);
+        let h = build_headers(&Method::DELETE, "pp_sandbox_x", None, UA);
         assert!(get(&h, header::CONTENT_TYPE).is_none());
         assert!(get(&h, HEADER_IDEMPOTENCY_KEY).is_none());
     }
@@ -445,7 +462,7 @@ mod tests {
         // unless supplied. `build_headers` itself only sets it when the
         // caller passes Some(_), so a None call (orchestrator-internal use)
         // doesn't surprise-set anything.
-        let h = build_headers(&Method::POST, "pp_test_x", None, UA);
+        let h = build_headers(&Method::POST, "pp_sandbox_x", None, UA);
         assert!(get(&h, HEADER_IDEMPOTENCY_KEY).is_none());
         assert_eq!(get(&h, header::CONTENT_TYPE).unwrap(), "application/json");
     }

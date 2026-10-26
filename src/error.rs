@@ -284,8 +284,8 @@ impl Error {
     /// # Example
     ///
     /// ```no_run
-    /// use poli_page::{Error, PoliPage, ProjectModeInput};
-    /// # async fn run(client: PoliPage, input: ProjectModeInput) {
+    /// use poli_page::{Error, PoliPage, RenderInput};
+    /// # async fn run(client: PoliPage, input: RenderInput) {
     /// if let Err(err) = client.render.pdf(input).await {
     ///     if err.is_auth_error() {
     ///         eprintln!("refresh credentials: {err}");
@@ -450,48 +450,78 @@ pub struct ErrorPayload {
 ///
 /// `STORAGE_REQUIRED` was retired from the API and is intentionally absent.
 pub mod error_codes {
+    // --- Authentication and organization state (401 / 403) ---
     /// Returned when the request omits the `Authorization` header entirely.
     pub const MISSING_API_KEY: &str = "MISSING_API_KEY";
     /// The supplied API key is malformed or doesn't match any tenant.
     pub const INVALID_API_KEY: &str = "INVALID_API_KEY";
-    /// The tenant's billing is past due (402-class).
-    pub const PAYMENT_REQUIRED: &str = "PAYMENT_REQUIRED";
     /// The credentials are valid but lack permission for the action.
     pub const FORBIDDEN: &str = "FORBIDDEN";
     /// The tenant's organization was cancelled.
     pub const ORGANIZATION_CANCELLED: &str = "ORGANIZATION_CANCELLED";
     /// The tenant's organization data was purged.
     pub const ORGANIZATION_PURGED: &str = "ORGANIZATION_PURGED";
+    /// The organization is in its payment grace period (403).
+    pub const ORGANIZATION_PAYMENT_GRACE: &str = "ORGANIZATION_PAYMENT_GRACE";
+    /// The API key's environment is protected against this operation (403).
+    pub const ENVIRONMENT_PROTECTED: &str = "ENVIRONMENT_PROTECTED";
+    /// Thumbnails are not included in the organization's plan (403).
+    pub const THUMBNAILS_NOT_AVAILABLE: &str = "THUMBNAILS_NOT_AVAILABLE";
+
+    // --- Not found / gone (404 / 410) ---
     /// Generic 404 — no resource matched the request.
     pub const NOT_FOUND: &str = "NOT_FOUND";
-    /// The requested template version doesn't exist for the project/template.
-    pub const VERSION_NOT_FOUND: &str = "VERSION_NOT_FOUND";
+    /// No project matches the requested slug (404).
+    pub const PROJECT_NOT_FOUND: &str = "PROJECT_NOT_FOUND";
+    /// The project exists but is not published in the API key's environment (404).
+    pub const PROJECT_NOT_IN_ENVIRONMENT: &str = "PROJECT_NOT_IN_ENVIRONMENT";
+    /// No template matches the requested slug in the published project (404).
+    pub const TEMPLATE_NOT_FOUND: &str = "TEMPLATE_NOT_FOUND";
     /// The requested document ID doesn't exist.
     pub const DOCUMENT_NOT_FOUND: &str = "DOCUMENT_NOT_FOUND";
-    /// The resource was deleted (410-class).
-    pub const GONE: &str = "GONE";
-    /// Request body failed schema validation.
+    /// The document existed but was deleted (410).
+    pub const DOCUMENT_GONE: &str = "DOCUMENT_GONE";
+
+    // --- Validation (400 / 413) ---
+    /// Request body failed schema validation (including unknown fields).
     pub const VALIDATION_ERROR: &str = "VALIDATION_ERROR";
     /// `data` field was omitted from a render request.
     pub const MISSING_DATA: &str = "MISSING_DATA";
-    /// Neither `project` nor `template` was provided in project-mode input.
-    pub const MISSING_PROJECT_OR_TEMPLATE: &str = "MISSING_PROJECT_OR_TEMPLATE";
-    /// `template` slug missing in project-mode input.
+    /// `template` slug missing from a render request.
     pub const MISSING_TEMPLATE_SLUG: &str = "MISSING_TEMPLATE_SLUG";
-    /// `documents.preview` requires a `project` selector.
+    /// Storing a document requires a `project` selector.
     pub const PROJECT_REQUIRED_FOR_DOCUMENT: &str = "PROJECT_REQUIRED_FOR_DOCUMENT";
-    /// Version selector wasn't `draft` or an exact semver.
-    pub const INVALID_VERSION_FORMAT: &str = "INVALID_VERSION_FORMAT";
-    /// Project mode requires an explicit `version` selector.
-    pub const VERSION_REQUIRED: &str = "VERSION_REQUIRED";
-    /// `draft` versions can't be rendered with a live key (or vice versa).
-    pub const INVALID_VERSION_FOR_KEY_ENV: &str = "INVALID_VERSION_FOR_KEY_ENV";
+    /// The request targets an environment other than the API key's (400).
+    pub const ENVIRONMENT_MISMATCH: &str = "ENVIRONMENT_MISMATCH";
+    /// The template failed to render with the supplied data (400).
+    pub const TEMPLATE_ERROR: &str = "TEMPLATE_ERROR";
+    /// The render produced a document with no pages (400).
+    pub const EMPTY_DOCUMENT: &str = "EMPTY_DOCUMENT";
+    /// The render request body exceeds the size limit (413).
+    pub const RENDER_BODY_TOO_LARGE: &str = "RENDER_BODY_TOO_LARGE";
+    /// The rendered document exceeds the size limit (413).
+    pub const DOCUMENT_TOO_LARGE: &str = "DOCUMENT_TOO_LARGE";
+
+    // --- Quotas and rate limits (429) ---
     /// Tenant exceeded its plan quota.
     pub const QUOTA_EXCEEDED: &str = "QUOTA_EXCEEDED";
     /// Tenant exceeded its overage cap.
     pub const OVERAGE_CAP_EXCEEDED: &str = "OVERAGE_CAP_EXCEEDED";
+    /// Too many requests in the rate-limit window (429). Retried.
+    pub const RATE_LIMIT_EXCEEDED: &str = "RATE_LIMIT_EXCEEDED";
+
+    // --- Server side (5xx) ---
     /// Generic 5xx — server-side internal failure.
     pub const INTERNAL_ERROR: &str = "INTERNAL_ERROR";
+    /// The API could not read or write document storage (502).
+    pub const STORAGE_ACCESS_DENIED: &str = "STORAGE_ACCESS_DENIED";
+    /// A publish holds the project in this environment (503, with
+    /// `Retry-After`). Retried like any 5xx.
+    pub const PUBLISH_IN_PROGRESS: &str = "PUBLISH_IN_PROGRESS";
+    /// The organization is being migrated (503). Retried.
+    pub const ORGANIZATION_MIGRATING: &str = "ORGANIZATION_MIGRATING";
+    /// The render did not finish in time (504). Retried.
+    pub const RENDER_TIMEOUT: &str = "RENDER_TIMEOUT";
 }
 
 #[cfg(test)]
@@ -746,6 +776,102 @@ mod tests {
         // Bare reason — not the thiserror Display string ("API error (500): x").
         let p = api(500).to_payload();
         assert_eq!(p.message, "x");
+    }
+
+    // --- error_codes ---
+
+    /// The 31 API codes of the environments contract, and nothing else.
+    const CONTRACT_API_CODES: [&str; 31] = [
+        "DOCUMENT_GONE",
+        "DOCUMENT_NOT_FOUND",
+        "DOCUMENT_TOO_LARGE",
+        "EMPTY_DOCUMENT",
+        "ENVIRONMENT_MISMATCH",
+        "ENVIRONMENT_PROTECTED",
+        "FORBIDDEN",
+        "INTERNAL_ERROR",
+        "INVALID_API_KEY",
+        "MISSING_API_KEY",
+        "MISSING_DATA",
+        "MISSING_TEMPLATE_SLUG",
+        "NOT_FOUND",
+        "ORGANIZATION_CANCELLED",
+        "ORGANIZATION_MIGRATING",
+        "ORGANIZATION_PAYMENT_GRACE",
+        "ORGANIZATION_PURGED",
+        "OVERAGE_CAP_EXCEEDED",
+        "PROJECT_NOT_FOUND",
+        "PROJECT_NOT_IN_ENVIRONMENT",
+        "PROJECT_REQUIRED_FOR_DOCUMENT",
+        "PUBLISH_IN_PROGRESS",
+        "QUOTA_EXCEEDED",
+        "RATE_LIMIT_EXCEEDED",
+        "RENDER_BODY_TOO_LARGE",
+        "RENDER_TIMEOUT",
+        "STORAGE_ACCESS_DENIED",
+        "TEMPLATE_ERROR",
+        "TEMPLATE_NOT_FOUND",
+        "THUMBNAILS_NOT_AVAILABLE",
+        "VALIDATION_ERROR",
+    ];
+
+    #[test]
+    fn error_codes_module_holds_exactly_the_contract_api_codes() {
+        // Read the constants from the source so a removed code that lingers,
+        // or a new code that is not in the contract, fails here.
+        let src = include_str!("error.rs");
+        let start = src
+            .find("pub mod error_codes {")
+            .expect("error_codes module");
+        let module = &src[start..];
+        let module = &module[..module.find("\n}\n").expect("module end")];
+        let mut found: Vec<(&str, &str)> = module
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("pub const "))
+            .map(|rest| {
+                let (name, value) = rest.split_once(": &str = ").expect("const shape");
+                (name, value.trim_end_matches(';').trim_matches('"'))
+            })
+            .collect();
+        found.sort_unstable();
+        for (name, value) in &found {
+            assert_eq!(name, value, "constant {name} must equal its own name");
+        }
+        let names: Vec<&str> = found.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, CONTRACT_API_CODES);
+    }
+
+    #[test]
+    fn error_codes_new_in_the_environments_contract_are_exported() {
+        assert_eq!(error_codes::PUBLISH_IN_PROGRESS, "PUBLISH_IN_PROGRESS");
+        assert_eq!(error_codes::ENVIRONMENT_MISMATCH, "ENVIRONMENT_MISMATCH");
+        assert_eq!(
+            error_codes::PROJECT_NOT_IN_ENVIRONMENT,
+            "PROJECT_NOT_IN_ENVIRONMENT"
+        );
+        assert_eq!(error_codes::TEMPLATE_NOT_FOUND, "TEMPLATE_NOT_FOUND");
+        assert_eq!(error_codes::DOCUMENT_GONE, "DOCUMENT_GONE");
+        assert_eq!(error_codes::ENVIRONMENT_PROTECTED, "ENVIRONMENT_PROTECTED");
+        assert_eq!(
+            error_codes::ORGANIZATION_PAYMENT_GRACE,
+            "ORGANIZATION_PAYMENT_GRACE"
+        );
+        assert_eq!(error_codes::EMPTY_DOCUMENT, "EMPTY_DOCUMENT");
+        assert_eq!(error_codes::STORAGE_ACCESS_DENIED, "STORAGE_ACCESS_DENIED");
+        assert_eq!(
+            error_codes::ORGANIZATION_MIGRATING,
+            "ORGANIZATION_MIGRATING"
+        );
+        assert_eq!(error_codes::PROJECT_NOT_FOUND, "PROJECT_NOT_FOUND");
+        assert_eq!(error_codes::TEMPLATE_ERROR, "TEMPLATE_ERROR");
+        assert_eq!(
+            error_codes::THUMBNAILS_NOT_AVAILABLE,
+            "THUMBNAILS_NOT_AVAILABLE"
+        );
+        assert_eq!(error_codes::RATE_LIMIT_EXCEEDED, "RATE_LIMIT_EXCEEDED");
+        assert_eq!(error_codes::RENDER_BODY_TOO_LARGE, "RENDER_BODY_TOO_LARGE");
+        assert_eq!(error_codes::DOCUMENT_TOO_LARGE, "DOCUMENT_TOO_LARGE");
+        assert_eq!(error_codes::RENDER_TIMEOUT, "RENDER_TIMEOUT");
     }
 
     #[test]

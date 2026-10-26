@@ -528,7 +528,7 @@ fn fire_response_hook(hook: Option<&ResponseHook>, event: &ResponseEvent) {
 #[derive(Debug, Clone)]
 #[must_use = "a PoliPage client is only useful through its `render` or `documents` namespaces"]
 pub struct PoliPage {
-    /// The `render` namespace — `pdf`, `pdf_stream`, `preview`, `document`.
+    /// The `render` namespace — `pdf`, `pdf_stream`, `document`.
     pub render: Render,
     /// The `documents` namespace — `get`, `preview`, `thumbnails`, `delete`.
     pub documents: Documents,
@@ -556,7 +556,7 @@ impl PoliPage {
     /// use poli_page::PoliPage;
     /// # async fn run() -> Result<(), poli_page::Error> {
     /// let client = PoliPage::builder()
-    ///     .api_key("pp_test_...")
+    ///     .api_key("pp_sandbox_...")
     ///     .max_retries(3)
     ///     .timeout(std::time::Duration::from_secs(60))
     ///     .build()?;
@@ -676,7 +676,7 @@ impl PoliPageBuilder {
     ///         message: format!("custom http client: {e}"),
     ///     })?;
     /// let client = PoliPage::builder()
-    ///     .api_key("pp_test_...")
+    ///     .api_key("pp_sandbox_...")
     ///     .http_client(http)
     ///     .build()?;
     /// # let _ = client; Ok(()) }
@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn builder_rejects_invalid_base_url() {
         let err = PoliPage::builder()
-            .api_key("pp_test_x")
+            .api_key("pp_sandbox_x")
             .base_url("not a url")
             .build()
             .expect_err("invalid base url");
@@ -827,7 +827,7 @@ mod tests {
 
     #[test]
     fn builder_accepts_minimum_config() {
-        let client = PoliPage::new("pp_test_x").expect("default build");
+        let client = PoliPage::new("pp_sandbox_x").expect("default build");
         assert_eq!(client.inner.config.max_retries, DEFAULT_MAX_RETRIES);
         assert_eq!(client.inner.config.retry_delay, DEFAULT_RETRY_DELAY);
         assert_eq!(client.inner.config.timeout, DEFAULT_TIMEOUT);
@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn builder_overrides_take_effect() {
         let client = PoliPage::builder()
-            .api_key("pp_test_x")
+            .api_key("pp_sandbox_x")
             .base_url("https://api.example.com")
             .max_retries(5)
             .retry_delay(Duration::from_millis(100))
@@ -860,7 +860,7 @@ mod tests {
     fn poli_page_clone_is_cheap_arc_bump() {
         // Just verify the API compiles and the Arc count goes up — the actual
         // perf is structural (Arc<ClientInner>).
-        let client = PoliPage::new("pp_test_x").unwrap();
+        let client = PoliPage::new("pp_sandbox_x").unwrap();
         let before = Arc::strong_count(&client.inner);
         let _c2 = client.clone();
         let after = Arc::strong_count(&client.inner);
@@ -885,7 +885,7 @@ mod tests {
             .build()
             .expect("custom client builds");
         let client = PoliPage::builder()
-            .api_key("pp_test_x")
+            .api_key("pp_sandbox_x")
             .http_client(custom)
             .build()
             .expect("build with injected client");

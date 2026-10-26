@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 use tempfile::tempdir;
 use wiremock::matchers::{method, path};
@@ -18,7 +18,6 @@ fn descriptor_wire(presigned_url: &str) -> serde_json::Value {
         "projectSlug": "billing",
         "templateId": "tpl_1",
         "templateSlug": "invoice",
-        "version": "1.0.0",
         "environment": "live",
         "apiKeyId": "key_x",
         "format": "A4",
@@ -49,11 +48,10 @@ async fn make_servers() -> (MockServer, String) {
     (server, "/presigned/x.pdf".to_string())
 }
 
-fn input() -> ProjectModeInput {
-    ProjectModeInput {
+fn input() -> RenderInput {
+    RenderInput {
         project: "p".into(),
         template: "t".into(),
-        version: Some("1.0.0".into()),
         data: json!({}),
         ..Default::default()
     }
@@ -63,7 +61,7 @@ fn input() -> ProjectModeInput {
 async fn render_to_file_writes_pdf_bytes_to_destination() {
     let (server, _) = make_servers().await;
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .timeout(Duration::from_secs(2))
         .max_retries(0)
@@ -84,7 +82,7 @@ async fn render_to_file_writes_pdf_bytes_to_destination() {
 async fn render_to_file_creates_missing_parent_directories() {
     let (server, _) = make_servers().await;
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .timeout(Duration::from_secs(2))
         .max_retries(0)
@@ -104,7 +102,7 @@ async fn render_to_file_creates_missing_parent_directories() {
 async fn render_to_file_overwrites_existing_file() {
     let (server, _) = make_servers().await;
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .timeout(Duration::from_secs(2))
         .max_retries(0)
@@ -135,7 +133,7 @@ async fn render_to_file_surfaces_download_failed_on_presigned_404() {
         .mount(&server)
         .await;
     let client = PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .timeout(Duration::from_secs(2))
         .max_retries(0)
