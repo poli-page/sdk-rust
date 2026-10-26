@@ -840,7 +840,7 @@ mod tests {
         // A Windows checkout can turn the source into CRLF.
         let lf = include_str!("error.rs").replace("\r\n", "\n");
         let crlf = lf.replace('\n', "\r\n");
-        assert!(!error_code_constants(&lf).is_empty());
+        assert_eq!(error_code_constants(&lf).len(), CONTRACT_API_CODES.len());
         assert_eq!(error_code_constants(&crlf), error_code_constants(&lf));
     }
 
