@@ -1,10 +1,10 @@
 //! End-to-end runnable demo for the Poli Page Rust SDK.
 //!
 //! Method order mirrors the Node demo per spec §13 Phase 5:
-//! `render.pdf` → `render.pdf_stream` → `render_to_file` → `render.preview`
-//! → `render.document` → `documents.get` → `documents.thumbnails` →
+//! `render.pdf` → `render.pdf_stream` → `render_to_file` →
+//! `render.document` → `documents.get` → `documents.thumbnails` →
 //! `documents.preview` → `documents.delete` → deliberately trigger
-//! `INVALID_VERSION_FORMAT` to exercise the typed-error path.
+//! `TEMPLATE_NOT_FOUND` to exercise the typed-error path.
 //!
 //! API key resolution:
 //!   1. `POLI_PAGE_API_KEY` environment variable.
@@ -21,12 +21,11 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use poli_page::{Error, PoliPage, ProjectModeInput, ThumbnailFormat, ThumbnailOptions};
+use poli_page::{Error, PoliPage, RenderInput, ThumbnailFormat, ThumbnailOptions};
 use serde_json::json;
 
 const DEFAULT_PROJECT: &str = "getting-started";
 const DEFAULT_TEMPLATE: &str = "welcome";
-const DEFAULT_VERSION: &str = "1.0.0";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,23 +44,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Output directory: {}", out_dir.display());
     println!();
 
-    let input = || ProjectModeInput {
+    let input = || RenderInput {
         project: DEFAULT_PROJECT.into(),
         template: DEFAULT_TEMPLATE.into(),
-        version: Some(DEFAULT_VERSION.into()),
         data: json!({ "name": "Mickael" }),
         ..Default::default()
     };
 
     // ── 1. render.pdf ────────────────────────────────────────────────
-    step(1, 10, "render.pdf — buffer the full PDF into bytes");
+    step(1, 9, "render.pdf — buffer the full PDF into bytes");
     let pdf = client.render.pdf(input()).await?;
     let pdf_path = out_dir.join("render-pdf.pdf");
     fs::write(&pdf_path, &pdf)?;
     println!("  → {} bytes ({})", pdf.len(), pdf_path.display());
 
     // ── 2. render.pdf_stream ──────────────────────────────────────────
-    step(2, 10, "render.pdf_stream — async stream of chunks");
+    step(2, 9, "render.pdf_stream — async stream of chunks");
     let mut stream = std::pin::pin!(client.render.pdf_stream(input()).await?);
     let stream_path = out_dir.join("render-pdf-stream.pdf");
     let mut file = tokio::fs::File::create(&stream_path).await?;
@@ -83,49 +81,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  → {} bytes streamed ({})", total, stream_path.display(),);
 
     // ── 3. render_to_file ────────────────────────────────────────────
-    step(3, 10, "render_to_file — bounded-memory disk write");
+    step(3, 9, "render_to_file — bounded-memory disk write");
     let to_file_path = out_dir.join("render-to-file.pdf");
     poli_page::render_to_file(&client, input(), &to_file_path).await?;
     let written = fs::metadata(&to_file_path)?.len();
     println!("  → {} bytes ({})", written, to_file_path.display());
 
-    // ── 4. render.preview ────────────────────────────────────────────
-    step(4, 10, "render.preview — paginated HTML preview");
-    let preview = client.render.preview(input()).await?;
-    println!(
-        "  → {} pages, environment={:?}, html.len={}",
-        preview.total_pages,
-        preview.environment,
-        preview.html.len(),
-    );
-
-    // ── 5. render.document ───────────────────────────────────────────
-    step(5, 10, "render.document — stored document descriptor");
+    // ── 4. render.document ───────────────────────────────────────────
+    step(4, 9, "render.document — stored document descriptor");
     let descriptor = client.render.document(input()).await?;
     println!(
         "  → document_id={} pages={} size={}b",
         descriptor.document_id, descriptor.page_count, descriptor.size_bytes,
     );
 
-    // ── 6. documents.get ─────────────────────────────────────────────
-    step(6, 10, "documents.get — refresh descriptor + presigned URL");
+    // ── 5. documents.get ─────────────────────────────────────────────
+    step(5, 9, "documents.get — refresh descriptor + presigned URL");
     let fresh = client.documents.get(&descriptor.document_id).await?;
     println!("  → fresh presigned URL (expires {})", fresh.expires_at,);
 
-    // ── 7. documents.thumbnails ─────────────────────────────────────
+    // ── 6. documents.thumbnails ─────────────────────────────────────
     // Tier-gated on the API side: Free tier returns 403
     // THUMBNAILS_NOT_AVAILABLE. Mirrors the Node SDK integration test
     // (tests/integration/documents.integration.test.ts:39-52).
-    step(7, 10, "documents.thumbnails — generate PNG thumbnails");
+    step(6, 9, "documents.thumbnails — generate PNG thumbnails");
     match client
         .documents
         .thumbnails(
             &descriptor.document_id,
-            ThumbnailOptions {
-                width: 320,
+            Some(ThumbnailOptions {
                 format: Some(ThumbnailFormat::Png),
-                ..ThumbnailOptions::new(320)
-            },
+                ..ThumbnailOptions::new().width(320)
+            }),
         )
         .await
     {
@@ -144,8 +131,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(err) => return Err(err.into()),
     }
 
-    // ── 8. documents.preview ────────────────────────────────────────
-    step(8, 10, "documents.preview — stored paginated HTML");
+    // ── 7. documents.preview ────────────────────────────────────────
+    step(7, 9, "documents.preview — stored paginated HTML");
     let stored_preview = client.documents.preview(&descriptor.document_id).await?;
     println!(
         "  → {} pages, html.len={}",
@@ -153,29 +140,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stored_preview.html.len(),
     );
 
-    // ── 9. documents.delete ─────────────────────────────────────────
-    step(9, 10, "documents.delete — soft-delete the stored document");
+    // ── 8. documents.delete ─────────────────────────────────────────
+    step(8, 9, "documents.delete — soft-delete the stored document");
     client.documents.delete(&descriptor.document_id).await?;
-    println!("  → ok (re-delete now returns Error::Gone)");
+    println!("  → ok (deletes are idempotent: a re-delete also returns Ok)");
 
-    // ── 10. error handling ──────────────────────────────────────────
-    // Deliberately send an invalid version string to make the API return
-    // 400 INVALID_VERSION_FORMAT. Mirrors step 10 in the Python/Go/Ruby
-    // demos — the SDK is *expected* to return Err here; the demo catches
-    // it and inspects the typed Error.
+    // ── 9. error handling ───────────────────────────────────────────
+    // Deliberately ask for a template that does not exist to make the API
+    // return 404 TEMPLATE_NOT_FOUND. The SDK is *expected* to return Err
+    // here; the demo catches it and inspects the typed Error.
     step(
-        10,
-        10,
+        9,
+        9,
         "error handling — DEMO ONLY (we trigger an error on purpose)",
     );
     println!("  WARNING: This step is intentional — the SDK is about to return");
     println!("  an error, but the demo will catch and inspect it. The demo is NOT crashing.");
-    println!("  (We send version=\"banana\", expecting 400 INVALID_VERSION_FORMAT.)");
+    println!("  (We ask for template \"does-not-exist\", expecting 404 TEMPLATE_NOT_FOUND.)");
     println!();
-    let bad_input = ProjectModeInput {
+    let bad_input = RenderInput {
         project: DEFAULT_PROJECT.into(),
-        template: DEFAULT_TEMPLATE.into(),
-        version: Some("banana".into()),
+        template: "does-not-exist".into(),
         data: json!({}),
         ..Default::default()
     };
@@ -189,8 +174,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    is_auth    = {}", err.is_auth_error());
             println!("    is_retry   = {}", err.is_retryable());
             match &err {
-                Error::BadRequest { code, .. } => {
-                    println!("    matched Error::BadRequest with code {code}");
+                Error::NotFound { code, .. } => {
+                    println!("    matched Error::NotFound with code {code}");
                 }
                 other => {
                     println!("    matched other variant: {other:?}");

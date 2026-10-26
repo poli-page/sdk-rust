@@ -16,10 +16,7 @@ use bytes::Bytes;
 use tokio::runtime::Runtime;
 
 use crate::Error;
-use crate::{
-    DocumentDescriptor, DocumentPreviewResult, PreviewResult, ProjectModeInput, RenderInput,
-    Thumbnail, ThumbnailOptions,
-};
+use crate::{DocumentDescriptor, DocumentPreviewResult, RenderInput, Thumbnail, ThumbnailOptions};
 use crate::{RequestEvent, ResponseEvent, RetryEvent};
 
 pub mod fs;
@@ -59,15 +56,14 @@ impl PoliPage {
     /// # Example
     ///
     /// ```no_run
-    /// use poli_page::{ProjectModeInput, blocking::PoliPage};
+    /// use poli_page::{RenderInput, blocking::PoliPage};
     /// use serde_json::json;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
-    /// let pdf = client.render.pdf(ProjectModeInput {
+    /// let client = PoliPage::new("pp_sandbox_...")?;
+    /// let pdf = client.render.pdf(RenderInput {
     ///     project: "getting-started".into(),
     ///     template: "welcome".into(),
-    ///     version: Some("1.0.0".into()),
     ///     data: json!({ "name": "World" }),
     ///     ..Default::default()
     /// })?;
@@ -240,21 +236,15 @@ impl std::fmt::Debug for Render {
 }
 
 impl Render {
-    /// Sync counterpart of [`crate::Render::preview`].
-    pub fn preview(&self, input: impl Into<RenderInput>) -> Result<PreviewResult, Error> {
-        let input = input.into();
-        self.runtime.block_on(self.inner.preview(input))
-    }
-
     /// Sync counterpart of [`crate::Render::pdf`].
-    pub fn pdf(&self, input: ProjectModeInput) -> Result<Bytes, Error> {
+    pub fn pdf(&self, input: RenderInput) -> Result<Bytes, Error> {
         self.runtime.block_on(self.inner.pdf(input))
     }
 
     /// Sync counterpart of [`crate::Render::pdf_stream`] — returns a
     /// `std::io::Read` whose reads block on chunk arrival. Use with
     /// `std::io::copy` to pipe into any sink.
-    pub fn pdf_stream(&self, input: ProjectModeInput) -> Result<BlockingPdfReader, Error> {
+    pub fn pdf_stream(&self, input: RenderInput) -> Result<BlockingPdfReader, Error> {
         let stream = self.runtime.block_on(self.inner.pdf_stream(input))?;
         Ok(BlockingPdfReader::new(Arc::clone(&self.runtime), stream))
     }
@@ -265,7 +255,7 @@ impl Render {
     /// runtime. For purely sync downloads, the descriptor's
     /// `presigned_pdf_url` can be passed to [`Render::pdf_stream`] or fetched
     /// with any sync HTTP client.
-    pub fn document(&self, input: ProjectModeInput) -> Result<DocumentDescriptor, Error> {
+    pub fn document(&self, input: RenderInput) -> Result<DocumentDescriptor, Error> {
         self.runtime.block_on(self.inner.document(input))
     }
 }
@@ -297,7 +287,11 @@ impl Documents {
     }
 
     /// Sync counterpart of [`crate::Documents::thumbnails`].
-    pub fn thumbnails(&self, id: &str, options: ThumbnailOptions) -> Result<Vec<Thumbnail>, Error> {
+    pub fn thumbnails(
+        &self,
+        id: &str,
+        options: Option<ThumbnailOptions>,
+    ) -> Result<Vec<Thumbnail>, Error> {
         self.runtime.block_on(self.inner.thumbnails(id, options))
     }
 

@@ -1,17 +1,16 @@
-//! `render.preview` against the deployed develop API.
+//! `render.document` against the deployed API.
 
 use std::env;
 
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 
-/// Default test target — `getting-started/welcome` template at `1.0.0`.
-/// Mirrors the Node integration tests and the demo script. Override via
-/// `POLI_PAGE_TEST_PROJECT` / `POLI_PAGE_TEST_TEMPLATE` / `POLI_PAGE_TEST_VERSION`
-/// env vars (spec §16.1).
+/// Default test target — the `getting-started` project's `welcome` template,
+/// provisioned in every organization's sandbox. Mirrors the Node integration
+/// tests and the demo script. Override via `POLI_PAGE_TEST_PROJECT` /
+/// `POLI_PAGE_TEST_TEMPLATE` env vars (spec §16.1).
 const DEFAULT_PROJECT: &str = "getting-started";
 const DEFAULT_TEMPLATE: &str = "welcome";
-const DEFAULT_VERSION: &str = "1.0.0";
 
 fn client() -> PoliPage {
     let key = env::var("POLI_PAGE_API_KEY").expect(
@@ -26,28 +25,33 @@ fn client() -> PoliPage {
 }
 
 #[tokio::test]
-#[ignore = "hits the deployed develop API — run with --ignored + POLI_PAGE_API_KEY set"]
-async fn render_preview_returns_html_and_metadata() {
+#[ignore = "hits the deployed API — run with --ignored + POLI_PAGE_API_KEY set"]
+async fn render_document_returns_a_stored_document() {
     let client = client();
     let project =
         env::var("POLI_PAGE_TEST_PROJECT").unwrap_or_else(|_| DEFAULT_PROJECT.to_string());
     let template =
         env::var("POLI_PAGE_TEST_TEMPLATE").unwrap_or_else(|_| DEFAULT_TEMPLATE.to_string());
-    let version =
-        env::var("POLI_PAGE_TEST_VERSION").unwrap_or_else(|_| DEFAULT_VERSION.to_string());
 
-    let result = client
+    let doc = client
         .render
-        .preview(ProjectModeInput {
+        .document(RenderInput {
             project,
             template,
-            version: Some(version),
             data: json!({ "name": "World" }),
             ..Default::default()
         })
         .await
-        .expect("preview against develop");
+        .expect("render.document against the deployed API");
 
-    assert!(!result.html.is_empty(), "preview html was empty");
-    assert!(result.total_pages > 0, "expected at least one page");
+    assert!(doc.page_count > 0, "expected at least one page");
+    assert!(!doc.environment.is_empty(), "environment was empty");
+    let pdf = doc.download_pdf().await.expect("download_pdf");
+    assert_eq!(&pdf[..4], b"%PDF");
+
+    client
+        .documents
+        .delete(&doc.document_id)
+        .await
+        .expect("delete");
 }

@@ -10,7 +10,6 @@ use serde::Deserialize;
 
 use crate::client::ClientInner;
 use crate::types::page_format::{Orientation, PageFormat};
-use crate::types::preview::Environment;
 use crate::{Error, RenderMetadata};
 
 /// A stored document returned by `client.render.document` and (in Phase 4)
@@ -28,18 +27,19 @@ pub struct DocumentDescriptor {
     pub document_id: String,
     /// Owning organization (e.g. `"org_xyz"`).
     pub organization_id: String,
-    /// Project ID — `None` when the document was rendered in inline mode.
+    /// Project ID — `None` for documents stored by the removed inline-HTML
+    /// render mode.
     pub project_id: Option<String>,
     /// Project slug — same `None` rule.
     pub project_slug: Option<String>,
-    /// Template ID — `None` for inline-mode renders.
+    /// Template ID — same `None` rule.
     pub template_id: Option<String>,
     /// Template slug — same `None` rule.
     pub template_slug: Option<String>,
-    /// Resolved template version (e.g. `"1.0.0"` or `"draft"`).
-    pub version: Option<String>,
-    /// Sandbox vs live environment.
-    pub environment: Environment,
+    /// Name of the environment the document was rendered in — the API key's
+    /// environment (e.g. `"sandbox"`, `"live"`, `"staging"`). An open set:
+    /// any name the API returns is passed through unchanged.
+    pub environment: String,
     /// API key ID that issued the render — useful for audit trails.
     pub api_key_id: Option<String>,
     /// Resolved page format (e.g. `A4`).
@@ -93,7 +93,7 @@ impl DocumentDescriptor {
     /// ```no_run
     /// use poli_page::PoliPage;
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = PoliPage::new("pp_test_...")?;
+    /// let client = PoliPage::new("pp_sandbox_...")?;
     /// let doc = client.documents.get("doc_abc123").await?;
     /// let pdf = doc.download_pdf().await?;
     /// std::fs::write("invoice.pdf", &pdf)?;
@@ -126,10 +126,8 @@ pub(crate) fn attach_client(
 /// header — `documents.preview` is the only SDK endpoint that returns
 /// `text/html` directly (every other endpoint returns JSON or PDF bytes).
 ///
-/// **Note**: the field is `page_count` (singular), not `total_pages`. That
-/// matches the deployed API's header name and differs from
-/// [`crate::PreviewResult::total_pages`] — spec §5.5 / Node SDK commit
-/// `8523e13`.
+/// **Note**: the field is `page_count`, matching the deployed API's header
+/// name — spec §5.5 / Node SDK commit `8523e13`.
 #[derive(Debug, Clone)]
 pub struct DocumentPreviewResult {
     /// The stored paginated HTML, exactly as the API returned it.
@@ -152,7 +150,6 @@ mod tests {
             "projectSlug": "billing",
             "templateId": "tpl_invoice_v1",
             "templateSlug": "invoice",
-            "version": "1.0.0",
             "environment": "live",
             "apiKeyId": "key_live_abc",
             "format": "A4",
@@ -174,8 +171,7 @@ mod tests {
         assert_eq!(d.organization_id, "org_xyz");
         assert_eq!(d.project_slug.as_deref(), Some("billing"));
         assert_eq!(d.template_slug.as_deref(), Some("invoice"));
-        assert_eq!(d.version.as_deref(), Some("1.0.0"));
-        assert_eq!(d.environment, Environment::Live);
+        assert_eq!(d.environment, "live");
         assert_eq!(d.format, PageFormat::A4);
         assert_eq!(d.orientation, Some(Orientation::Portrait));
         assert_eq!(d.locale.as_deref(), Some("en-US"));
@@ -189,8 +185,7 @@ mod tests {
 
     #[test]
     fn deserializes_nullable_wire_fields_as_none() {
-        // Inline-mode renders produce a descriptor with project/template IDs
-        // set to null on the wire.
+        // Documents stored by the removed inline mode carry null project/template IDs.
         let mut wire = sample_wire();
         let obj = wire.as_object_mut().unwrap();
         obj.insert("projectId".into(), json!(null));
@@ -202,6 +197,14 @@ mod tests {
         assert!(d.project_slug.is_none());
         assert!(d.template_id.is_none());
         assert!(d.orientation.is_none());
+    }
+
+    #[test]
+    fn environment_is_an_open_set_and_passes_any_name_through() {
+        let mut wire = sample_wire();
+        wire["environment"] = json!("staging");
+        let d: DocumentDescriptor = serde_json::from_value(wire).unwrap();
+        assert_eq!(d.environment, "staging");
     }
 
     #[test]

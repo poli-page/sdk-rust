@@ -6,6 +6,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
 
     client.documents.delete("doc_INV-001").await?;
-    // Returns `()`. Re-deleting an already-deleted document yields Error::Gone.
+    // Returns `()`. Deletes are idempotent: re-deleting also returns `()`.
     Ok(())
 }

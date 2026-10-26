@@ -12,7 +12,7 @@ use tokio::runtime::Runtime;
 
 use crate::client::PdfByteStream;
 use crate::Error;
-use crate::ProjectModeInput;
+use crate::RenderInput;
 
 use super::PoliPage;
 
@@ -87,7 +87,7 @@ impl Read for BlockingPdfReader {
 /// Same shape as [`crate::render_to_file`].
 pub fn render_to_file(
     client: &PoliPage,
-    input: ProjectModeInput,
+    input: RenderInput,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
     let path = path.as_ref();

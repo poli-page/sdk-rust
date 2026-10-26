@@ -8,6 +8,57 @@ Breaking changes between major versions are summarized in [MIGRATION.md](MIGRATI
 
 ## [Unreleased]
 
+Implements the Poli Page environments contract. Breaking, with no
+deprecation window: the API has dropped template versions, the
+authenticated preview and inline-HTML rendering.
+
+### Removed
+
+- **BREAKING**: `render.preview` (async and `blocking`), `PreviewResult` and the
+  `/v1/render/preview` path. `documents.preview(id)`
+  (`GET /v1/documents/:id/preview`) stays.
+- **BREAKING**: `InlineModeInput` and the old `RenderInput` enum with its `From` impls.
+- **BREAKING**: The `version` input field and `DocumentDescriptor::version`. A render
+  uses the project's copy published in the API key's environment.
+- **BREAKING**: The `Environment` enum.
+- **BREAKING**: Error codes `VERSION_NOT_FOUND`, `INVALID_VERSION_FORMAT`,
+  `VERSION_REQUIRED`, `INVALID_VERSION_FOR_KEY_ENV`,
+  `MISSING_PROJECT_OR_TEMPLATE`, `GONE` (the API answers `410 DOCUMENT_GONE`)
+  and `PAYMENT_REQUIRED` (payment grace is `403 ORGANIZATION_PAYMENT_GRACE`).
+
+### Changed
+
+- **BREAKING**: `ProjectModeInput` is renamed `RenderInput` and is the only render input
+  type. The `POST /v1/render` body holds only `project`, `template`, `data`,
+  `metadata`, `format`, `orientation` and `locale`; unset optional fields
+  are omitted.
+- **BREAKING**: `DocumentDescriptor::environment` is a `String`: any environment name the
+  API returns (e.g. `staging`) is passed through unchanged.
+- **BREAKING**: `documents.thumbnails(id, options)` takes `Option<ThumbnailOptions>`
+  (async and `blocking`). Every option is optional: `ThumbnailOptions::width`
+  is `Option<u32>`, `ThumbnailOptions` derives `Default`,
+  `ThumbnailOptions::new()` takes no argument and `.width(n)` sets the
+  width. With no option set the body is `{}` and the API defaults apply
+  (width 400, JPEG). The SDK does not check bounds; the API answers
+  `400 VALIDATION_ERROR`.
+- `documents.delete` is documented as idempotent: it resolves on `204`,
+  including for an already-deleted document.
+- Doc examples use `pp_sandbox_...` keys; a key is `pp_{env}_{32 hex}`.
+- The integration test renders `getting-started`/`welcome` with no version
+  (`POLI_PAGE_TEST_VERSION` is gone).
+
+### Added
+
+- `ThumbnailFormat::Webp`.
+- Known error codes `PUBLISH_IN_PROGRESS` (503, retried like any 5xx,
+  honouring `Retry-After`), `ENVIRONMENT_MISMATCH`,
+  `PROJECT_NOT_IN_ENVIRONMENT`, `TEMPLATE_NOT_FOUND`, `DOCUMENT_GONE`,
+  `ENVIRONMENT_PROTECTED`, `ORGANIZATION_PAYMENT_GRACE`, `EMPTY_DOCUMENT`,
+  `STORAGE_ACCESS_DENIED`, `ORGANIZATION_MIGRATING`, `PROJECT_NOT_FOUND`,
+  `TEMPLATE_ERROR`, `THUMBNAILS_NOT_AVAILABLE`, `RATE_LIMIT_EXCEEDED`,
+  `RENDER_BODY_TOO_LARGE`, `DOCUMENT_TOO_LARGE`, `RENDER_TIMEOUT` (31 API
+  codes in all). Unknown codes still pass through verbatim.
+
 ## [0.9.0] - 2026-06-18
 
 First published release of the Rust SDK on crates.io. Behaviour parity with

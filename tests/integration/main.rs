@@ -4,7 +4,7 @@
 //!
 //! Local invocation:
 //! ```text
-//! POLI_PAGE_API_KEY=pp_test_... \
+//! POLI_PAGE_API_KEY=pp_sandbox_... \
 //!   cargo test --features integration --test integration -- --ignored
 //! ```
 //!

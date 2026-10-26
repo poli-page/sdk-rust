@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use poli_page::blocking::PoliPage as BlockingPoliPage;
-use poli_page::{ProjectModeInput, ThumbnailOptions};
+use poli_page::{RenderInput, ThumbnailOptions};
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -24,7 +24,6 @@ fn descriptor_wire(presigned_url: &str) -> serde_json::Value {
         "projectSlug": "billing",
         "templateId": "tpl_1",
         "templateSlug": "invoice",
-        "version": "1.0.0",
         "environment": "live",
         "apiKeyId": "key_x",
         "format": "A4",
@@ -39,11 +38,10 @@ fn descriptor_wire(presigned_url: &str) -> serde_json::Value {
     })
 }
 
-fn input() -> ProjectModeInput {
-    ProjectModeInput {
+fn input() -> RenderInput {
+    RenderInput {
         project: "p".into(),
         template: "t".into(),
-        version: Some("1.0.0".into()),
         data: json!({}),
         ..Default::default()
     }
@@ -69,15 +67,6 @@ fn mock_server() -> (MockServer, tokio::runtime::Runtime) {
         Mock::given(method("GET"))
             .and(path("/presigned/x.pdf"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(PDF_STUB))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/v1/render/preview"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "html": "<p>blocking-preview</p>",
-                "totalPages": 1,
-                "environment": "sandbox"
-            })))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -116,7 +105,7 @@ fn mock_server() -> (MockServer, tokio::runtime::Runtime) {
 
 fn client(uri: String) -> BlockingPoliPage {
     BlockingPoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(uri)
         .timeout(Duration::from_secs(2))
         .max_retries(0)
@@ -125,12 +114,13 @@ fn client(uri: String) -> BlockingPoliPage {
 }
 
 #[test]
-fn blocking_preview_runs_without_a_caller_runtime() {
+fn blocking_document_runs_without_a_caller_runtime() {
     let (server, _rt) = mock_server();
     let client = client(server.uri());
     // No #[tokio::test] — purely synchronous call site.
-    let result = client.render.preview(input()).expect("preview");
-    assert_eq!(result.html, "<p>blocking-preview</p>");
+    let doc = client.render.document(input()).expect("document");
+    assert_eq!(doc.document_id, "doc_blk");
+    assert_eq!(doc.environment, "live");
 }
 
 #[test]
@@ -173,8 +163,13 @@ fn blocking_documents_round_trip_get_thumbnails_preview_delete() {
 
     let thumbs = client
         .documents
-        .thumbnails("doc_blk", ThumbnailOptions::new(320))
+        .thumbnails("doc_blk", None)
         .expect("thumbnails");
+    assert_eq!(thumbs.len(), 1);
+    let thumbs = client
+        .documents
+        .thumbnails("doc_blk", Some(ThumbnailOptions::new().width(320)))
+        .expect("thumbnails with options");
     assert_eq!(thumbs.len(), 1);
 
     let preview = client.documents.preview("doc_blk").expect("preview");
@@ -190,7 +185,7 @@ fn blocking_client_is_clone() {
     let (server, _rt) = mock_server();
     let client = client(server.uri());
     let c2 = client.clone();
-    let _ = c2.render.preview(input()).expect("clone-then-preview");
+    let _ = c2.render.document(input()).expect("clone-then-document");
 }
 
 #[test]
@@ -202,7 +197,7 @@ fn blocking_builder_accepts_on_request_setter() {
     let count = Arc::new(AtomicU32::new(0));
     let c = Arc::clone(&count);
     let client = poli_page::blocking::PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(0)
         .timeout(Duration::from_secs(2))
@@ -212,7 +207,7 @@ fn blocking_builder_accepts_on_request_setter() {
         .build()
         .expect("builder");
 
-    let _ = client.render.preview(input()).expect("preview");
+    let _ = client.render.document(input()).expect("document");
     assert_eq!(count.load(Ordering::SeqCst), 1, "fired once");
 }
 
@@ -225,7 +220,7 @@ fn blocking_builder_accepts_on_response_setter() {
     let count = Arc::new(AtomicU32::new(0));
     let c = Arc::clone(&count);
     let client = poli_page::blocking::PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(server.uri())
         .max_retries(0)
         .timeout(Duration::from_secs(2))
@@ -236,6 +231,6 @@ fn blocking_builder_accepts_on_response_setter() {
         .build()
         .expect("builder");
 
-    let _ = client.render.preview(input()).expect("preview");
+    let _ = client.render.document(input()).expect("document");
     assert_eq!(count.load(Ordering::SeqCst), 1, "fired once on success");
 }

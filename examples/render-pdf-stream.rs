@@ -1,6 +1,6 @@
 //! Demonstrates: client.render.pdf_stream(input) — bounded-memory streaming.
 use futures_core::Stream;
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 use std::future::poll_fn;
 use std::pin::Pin;
@@ -11,10 +11,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let stream = client
         .render
-        .pdf_stream(ProjectModeInput {
+        .pdf_stream(RenderInput {
             project: "billing".into(),
             template: "invoice".into(),
-            version: Some("1.0.0".into()),
             data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
             ..Default::default()
         })

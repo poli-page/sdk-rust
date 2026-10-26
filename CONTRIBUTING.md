@@ -66,7 +66,7 @@ Integration tests hit the live API. They're gated by both the
 `integration` Cargo feature **and** `--ignored`:
 
 ```bash
-export POLI_PAGE_API_KEY=pp_test_...
+export POLI_PAGE_API_KEY=pp_sandbox_...
 cargo test --features integration --test integration -- --ignored
 ```
 
@@ -75,7 +75,6 @@ Override the target template / project via env vars:
 ```bash
 POLI_PAGE_TEST_PROJECT=billing \
 POLI_PAGE_TEST_TEMPLATE=invoice \
-POLI_PAGE_TEST_VERSION=1.0.0 \
 cargo test --features integration --test integration -- --ignored
 ```
 

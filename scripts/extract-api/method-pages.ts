@@ -1,6 +1,6 @@
 // Build per-method reference pages from the rustdoc JSON output.
 //
-// Method targets are hard-coded — there are only nine public methods on the
+// Method targets are hard-coded — there are only eight public methods on the
 // Rust surface, and we want to control the canonical slug + example file
 // mapping. This is the same approach sdk-node's extractor takes.
 
@@ -39,13 +39,6 @@ const METHODS: readonly MethodTarget[] = [
     exampleFile: 'render-pdf-stream.rs',
     errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'QUOTA_EXCEEDED', 'timeout', 'network_error', 'INTERNAL_ERROR'],
     locate: (td) => findMethodOn(td, 'Render', 'pdf_stream'),
-  },
-  {
-    slug: 'render-preview',
-    displayName: 'client.render.preview',
-    exampleFile: 'render-preview.rs',
-    errorCodes: ['VALIDATION_ERROR', 'NOT_FOUND', 'QUOTA_EXCEEDED', 'INTERNAL_ERROR'],
-    locate: (td) => findMethodOn(td, 'Render', 'preview'),
   },
   {
     slug: 'render-document',

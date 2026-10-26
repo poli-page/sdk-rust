@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use poli_page::{Environment, PageFormat, PoliPage, ThumbnailFormat, ThumbnailOptions};
+use poli_page::{PageFormat, PoliPage, ThumbnailFormat, ThumbnailOptions};
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -16,7 +16,7 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 #[allow(clippy::unused_async)]
 async fn build_client(uri: String) -> PoliPage {
     PoliPage::builder()
-        .api_key("pp_test_x")
+        .api_key("pp_sandbox_x")
         .base_url(uri)
         .max_retries(0)
         .retry_delay(Duration::from_millis(1))
@@ -33,7 +33,6 @@ fn descriptor_wire(presigned_url: &str) -> serde_json::Value {
         "projectSlug": "billing",
         "templateId": "tpl_invoice_v1",
         "templateSlug": "invoice",
-        "version": "1.0.0",
         "environment": "live",
         "apiKeyId": "key_live_abc",
         "format": "A4",
@@ -67,7 +66,7 @@ async fn get_fetches_v1_documents_id_and_returns_descriptor() {
     assert_eq!(doc.document_id, "doc_abc123");
     assert_eq!(doc.template_slug.as_deref(), Some("invoice"));
     assert_eq!(doc.format, PageFormat::A4);
-    assert_eq!(doc.environment, Environment::Live);
+    assert_eq!(doc.environment, "live");
     assert_eq!(doc.presigned_pdf_url, presigned);
 }
 
@@ -267,11 +266,10 @@ async fn thumbnails_posts_with_options_wrapped_in_thumbnails_key() {
         .documents
         .thumbnails(
             "doc_abc123",
-            ThumbnailOptions {
-                width: 840,
+            Some(ThumbnailOptions {
                 format: Some(ThumbnailFormat::Png),
-                ..ThumbnailOptions::new(840)
-            },
+                ..ThumbnailOptions::new().width(840)
+            }),
         )
         .await
         .expect("thumbnails");
@@ -297,12 +295,12 @@ async fn thumbnails_forwards_all_options_inside_the_wrap() {
         .documents
         .thumbnails(
             "doc_abc123",
-            ThumbnailOptions {
-                width: 320,
+            Some(ThumbnailOptions {
+                width: Some(320),
                 format: Some(ThumbnailFormat::Jpeg),
                 quality: Some(85),
                 pages: Some(vec![1, 2, 3]),
-            },
+            }),
         )
         .await
         .expect("thumbnails");
@@ -331,7 +329,7 @@ async fn thumbnails_unwraps_response_envelope_and_returns_vec() {
     let client = build_client(server.uri()).await;
     let thumbs = client
         .documents
-        .thumbnails("doc_abc123", ThumbnailOptions::new(840))
+        .thumbnails("doc_abc123", None)
         .await
         .expect("thumbnails");
     assert_eq!(thumbs.len(), 2);
@@ -351,7 +349,7 @@ async fn thumbnails_encodes_special_characters_in_id() {
     let client = build_client(server.uri()).await;
     let _ = client
         .documents
-        .thumbnails("doc/with/slashes", ThumbnailOptions::new(100))
+        .thumbnails("doc/with/slashes", None)
         .await
         .expect("thumbnails");
 }
@@ -367,7 +365,7 @@ async fn thumbnails_sends_auto_generated_idempotency_key() {
     let client = build_client(server.uri()).await;
     let _ = client
         .documents
-        .thumbnails("doc_abc123", ThumbnailOptions::new(100))
+        .thumbnails("doc_abc123", None)
         .await
         .expect("thumbnails");
     let req = &server.received_requests().await.unwrap()[0];
@@ -376,6 +374,73 @@ async fn thumbnails_sends_auto_generated_idempotency_key() {
         .get("idempotency-key")
         .expect("idempotency-key header");
     assert_eq!(idem.to_str().unwrap().len(), 36); // UUID v4
+}
+
+#[tokio::test]
+async fn thumbnails_without_options_sends_an_empty_object() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/documents/doc_abc123/thumbnails"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "thumbnails": [] })))
+        .mount(&server)
+        .await;
+    let client = build_client(server.uri()).await;
+    client
+        .documents
+        .thumbnails("doc_abc123", None)
+        .await
+        .expect("thumbnails");
+    let req = &server.received_requests().await.unwrap()[0];
+    let body: serde_json::Value = req.body_json().expect("json body");
+    assert_eq!(body, json!({}));
+}
+
+#[tokio::test]
+async fn thumbnails_with_no_option_set_sends_an_empty_object() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/documents/doc_abc123/thumbnails"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "thumbnails": [] })))
+        .mount(&server)
+        .await;
+    let client = build_client(server.uri()).await;
+    client
+        .documents
+        .thumbnails("doc_abc123", Some(ThumbnailOptions::new()))
+        .await
+        .expect("thumbnails");
+    let req = &server.received_requests().await.unwrap()[0];
+    let body: serde_json::Value = req.body_json().expect("json body");
+    assert_eq!(body, json!({}));
+}
+
+#[tokio::test]
+async fn thumbnails_accepts_webp_and_forwards_out_of_range_values_unchecked() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/documents/doc_abc123/thumbnails"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "thumbnails": [] })))
+        .mount(&server)
+        .await;
+    let client = build_client(server.uri()).await;
+    client
+        .documents
+        .thumbnails(
+            "doc_abc123",
+            Some(ThumbnailOptions {
+                format: Some(ThumbnailFormat::Webp),
+                quality: Some(250),
+                ..ThumbnailOptions::new().width(10)
+            }),
+        )
+        .await
+        .expect("thumbnails");
+    let req = &server.received_requests().await.unwrap()[0];
+    let body: serde_json::Value = req.body_json().expect("json body");
+    assert_eq!(
+        body,
+        json!({ "thumbnails": { "width": 10, "format": "webp", "quality": 250 } }),
+    );
 }
 
 // =============================================================================
@@ -415,23 +480,39 @@ async fn delete_encodes_special_characters_in_id() {
 }
 
 #[tokio::test]
-async fn delete_surfaces_gone_when_already_deleted() {
+async fn delete_resolves_on_204_for_an_already_deleted_document() {
     let server = MockServer::start().await;
     Mock::given(method("DELETE"))
         .and(path("/v1/documents/doc_abc123"))
-        .respond_with(
-            ResponseTemplate::new(410)
-                .set_body_json(json!({ "code": "GONE", "message": "already deleted" })),
-        )
+        .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
     let client = build_client(server.uri()).await;
-    let err = client
+    client.documents.delete("doc_abc123").await.expect("delete");
+    // The API answers 204 again on a re-delete: deletes are idempotent.
+    client
         .documents
         .delete("doc_abc123")
         .await
-        .expect_err("gone");
+        .expect("re-delete");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn get_surfaces_document_gone_from_410() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/documents/doc_abc123"))
+        .respond_with(ResponseTemplate::new(410).set_body_json(json!({
+            "error": "DOCUMENT_GONE",
+            "detail": "The document was deleted."
+        })))
+        .mount(&server)
+        .await;
+    let client = build_client(server.uri()).await;
+    let err = client.documents.get("doc_abc123").await.expect_err("gone");
     assert!(matches!(err, poli_page::Error::Gone { .. }));
+    assert_eq!(err.code(), poli_page::error_codes::DOCUMENT_GONE);
     assert_eq!(err.status(), Some(410));
 }
 

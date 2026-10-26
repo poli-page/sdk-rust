@@ -1,5 +1,5 @@
 //! Demonstrates: client.render.document(input) — render + store, return descriptor.
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 
 #[tokio::main]
@@ -8,10 +8,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let doc = client
         .render
-        .document(ProjectModeInput {
+        .document(RenderInput {
             project: "billing".into(),
             template: "invoice".into(),
-            version: Some("1.0.0".into()),
             data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
             ..Default::default()
         })

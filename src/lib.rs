@@ -47,9 +47,8 @@ pub use fs::render_to_file;
 pub use render::Render;
 pub use retry::{RequestEvent, ResponseEvent, RetryEvent};
 pub use types::{
-    DocumentDescriptor, DocumentPreviewResult, Environment, InlineModeInput, MetadataValue,
-    Orientation, PageFormat, PreviewResult, ProjectModeInput, RenderInput, RenderMetadata,
-    Thumbnail, ThumbnailFormat, ThumbnailOptions,
+    DocumentDescriptor, DocumentPreviewResult, MetadataValue, Orientation, PageFormat, RenderInput,
+    RenderMetadata, Thumbnail, ThumbnailFormat, ThumbnailOptions,
 };
 
 pub(crate) mod internal;

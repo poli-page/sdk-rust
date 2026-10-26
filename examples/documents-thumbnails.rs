@@ -1,4 +1,6 @@
 //! Demonstrates: client.documents.thumbnails(id, options) — page thumbnails.
+//!
+//! Pass `None` for the API defaults (400 px wide JPEG).
 use poli_page::{PoliPage, ThumbnailFormat, ThumbnailOptions};
 
 #[tokio::main]
@@ -9,11 +11,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .documents
         .thumbnails(
             "doc_INV-001",
-            ThumbnailOptions {
-                width: 320,
+            Some(ThumbnailOptions {
                 format: Some(ThumbnailFormat::Png),
-                ..ThumbnailOptions::new(320)
-            },
+                ..ThumbnailOptions::new().width(320)
+            }),
         )
         .await?;
 
