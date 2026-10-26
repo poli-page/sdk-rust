@@ -1,73 +1,49 @@
 ---
-title: Render modes
-description: Project mode renders a stored template; inline mode renders raw HTML and is supported only by preview.
+title: Render input
+description: RenderInput names a published template by its project and template slugs; it is the only input of every render method.
 ---
 
-The Rust SDK exposes two ways to describe what to render: **project mode** (a stored template at `project/template`) and **inline mode** (raw HTML you pass directly).
+The Rust SDK describes what to render with one struct, `RenderInput`: a template of a stored project, named by its `project` and `template` slugs, plus the `data` that fills it. It is the input of every render method: `render.pdf`, `render.pdf_stream`, `render.document` and the `render_to_file` helper.
 
-Project mode is required by all the PDF-producing methods (`render.pdf`, `render.pdf_stream`, `render.document`, and the `render_to_file` helper). Inline mode is supported only by `render.preview`, which returns HTML rather than PDF bytes — useful for debugging template data without engaging the PDF pipeline.
-
-## Project mode
-
-You reference a template by its `project` and `template` slugs, plus a `data` object that fills the template's placeholders. Pin a `version` (required in project mode):
+## RenderInput
 
 ```rust
-use poli_page::ProjectModeInput;
+use poli_page::RenderInput;
 use serde_json::json;
 
-let pdf = client.render.pdf(ProjectModeInput {
+let pdf = client.render.pdf(RenderInput {
     project: "billing".into(),
     template: "invoice".into(),
-    version: Some("1.0.0".into()),
     data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
     ..Default::default()
 }).await?;
 ```
 
-Project mode keeps templates centralized — anyone with dashboard access can edit them without touching code.
+`project`, `template` and `data` are required by the API. `RenderInput::default()` sets `data` to JSON `null`, so always set it; `json!({})` is sent as `{}`. The optional `format`, `orientation`, `locale` and `metadata` fields are left out of the request when `None`. `idempotency_key` is sent as the `Idempotency-Key` header and `timeout` overrides the per-attempt timeout; neither is part of the request body.
 
-## Inline mode (preview only)
+## Environments, not versions
 
-For one-off layout experiments, pass the HTML directly. `InlineModeInput` has a `template: String` field and no `project`:
+There is no version to pick. A render uses the project's copy published in the API key's environment: a `pp_sandbox_…` key renders what is published in `sandbox`. To render your own templates, publish the project to the key's environment.
 
-```rust
-use poli_page::InlineModeInput;
-use serde_json::json;
-
-let preview = client.render.preview(InlineModeInput {
-    template: "<h1>Hello {{ name }}</h1>".into(),
-    data: json!({ "name": "World" }),
-    ..Default::default()
-}).await?;
-```
-
-Inline mode only works with `render.preview`. To turn inline HTML into a PDF, save it as a template in the dashboard first, then use project mode.
+The API has no preview of a template and no inline-HTML rendering. To try a template or raw HTML without an API key, use the playground at [play.poli.page](https://play.poli.page). `documents.preview(id)` still returns the stored HTML of a document you already rendered.
 
 ## Example
 
 ```rust
-use poli_page::{InlineModeInput, PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
 
-    // Project mode — PDF
-    let _invoice_pdf = client.render.pdf(ProjectModeInput {
-        project: "billing".into(),
-        template: "invoice".into(),
-        version: Some("1.0.0".into()),
-        data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
+    let doc = client.render.document(RenderInput {
+        project: "getting-started".into(),
+        template: "welcome".into(),
+        data: json!({ "name": "SDK Demo" }),
         ..Default::default()
     }).await?;
-
-    // Inline mode — preview HTML only
-    let _greeting = client.render.preview(InlineModeInput {
-        template: "<h1>Hello {{ name }}</h1>".into(),
-        data: json!({ "name": "World" }),
-        ..Default::default()
-    }).await?;
+    println!("rendered in {}", doc.environment);
 
     Ok(())
 }

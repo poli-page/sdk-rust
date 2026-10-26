@@ -48,7 +48,7 @@ For OpenTelemetry, pair the SDK's tracing spans with `tracing-opentelemetry` to 
 ## Example
 
 ```rust
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 
 #[tokio::main]
@@ -65,10 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build()?;
 
-    let _pdf = client.render.pdf(ProjectModeInput {
+    let _pdf = client.render.pdf(RenderInput {
         project: "billing".into(),
         template: "invoice".into(),
-        version: Some("1.0.0".into()),
         data: json!({ "invoiceNumber": "INV-001" }),
         ..Default::default()
     }).await?;

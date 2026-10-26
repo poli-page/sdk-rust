@@ -1,17 +1,23 @@
 ---
 title: Authentication
-description: How the Poli Page SDK authenticates with the API using test or live keys.
+description: How the Poli Page SDK authenticates with the API, and how an API key names its environment.
 ---
 
 import ApiKeyCallout from '@preset/components/ApiKeyCallout.astro';
 
-The Poli Page Rust SDK authenticates every request with a bearer token. The key prefix determines which environment the request hits.
+The Poli Page Rust SDK authenticates every request with a bearer token. An API key belongs to one environment of your organization, and its text names that environment.
 
 ## API keys
 
 <ApiKeyCallout />
 
-Pass the key to the client constructor:
+A key is `pp_{env}_` followed by 32 lowercase hex characters, where `{env}` is the name of the key's environment. Environment names are 1-20 characters: lowercase letters, digits and single inner hyphens, starting with a letter. A full key matches:
+
+```text
+^pp_(?=[a-z][a-z0-9-]{0,19}_)[a-z][a-z0-9]*(?:-[a-z0-9]+)*_[0-9a-f]{32}$
+```
+
+Standard and service keys share this one format. The SDK sends the key as a Bearer token and never inspects or validates it. Pass the key to the client constructor:
 
 ```rust
 use poli_page::PoliPage;
@@ -20,6 +26,18 @@ let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
 ```
 
 The SDK never reads `POLI_PAGE_API_KEY` implicitly. You always pass the key in.
+
+## Environments
+
+| Environment                           | Key            | Watermark | Counted |
+| ------------------------------------- | -------------- | --------- | ------- |
+| `sandbox` (every org)                 | `pp_sandbox_…` | yes       | no      |
+| `live` (every org, deletable on Pro+) | `pp_live_…`    | no        | yes     |
+| created on Pro+ (e.g. `staging`)      | `pp_staging_…` | no        | yes     |
+
+"Counted" means the render counts toward the organization's monthly PDF quota. `sandbox` documents are watermarked, are not counted and expire 30 days after creation. There is no watermark option: a template that wants a watermark outside `sandbox` uses the `poli-watermark` class.
+
+A render uses the project's copy published in the key's environment, and `DocumentDescriptor::environment` reports the environment a document was rendered in. Every key uses the same endpoint, `https://api.poli.page`.
 
 ## Example
 

@@ -96,7 +96,7 @@ behind us.
 2. Move `[Unreleased]` → `[X.Y.Z] - YYYY-MM-DD` in `CHANGELOG.md`. Keep the
    heading exactly `## [X.Y.Z] - YYYY-MM-DD` — the workflow extracts that
    section verbatim as the GitHub Release notes.
-3. If MAJOR, add a section to `MIGRATION.md`.
+3. If the release is breaking (a MAJOR, or a MINOR while on `0.x`), add a section to `MIGRATION.md`.
 4. Commit on `main`: `chore(release): vX.Y.Z`, push, and wait for `CI` to
    go green (`gh run watch`).
 5. Tag the same version and push the tag:

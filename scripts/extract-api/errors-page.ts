@@ -20,24 +20,24 @@ Every fallible operation in the crate returns \`Result<T, poli_page::Error>\`. S
 
 <ErrorTable errors={[{"code":"MISSING_API_KEY","when":"No API key in the request."},{"code":"INVALID_API_KEY","when":"The API key is malformed or revoked."}]} />
 
-## Billing and lifecycle
+## Access, billing and lifecycle
 
-<ErrorTable errors={[{"code":"PAYMENT_REQUIRED","when":"Organization billing is past due."},{"code":"FORBIDDEN","when":"The key does not have access to the requested resource."},{"code":"ORGANIZATION_CANCELLED","when":"The organization has been cancelled."},{"code":"ORGANIZATION_PURGED","when":"The organization has been purged."}]} />
+<ErrorTable errors={[{"code":"FORBIDDEN","when":"The key does not have access to the requested resource."},{"code":"ENVIRONMENT_PROTECTED","when":"The key's environment is protected against this operation."},{"code":"THUMBNAILS_NOT_AVAILABLE","when":"The organization's plan does not include thumbnails."},{"code":"ORGANIZATION_PAYMENT_GRACE","when":"The organization is in its payment grace period."},{"code":"ORGANIZATION_CANCELLED","when":"The organization has been cancelled."},{"code":"ORGANIZATION_PURGED","when":"The organization has been purged."}]} />
 
 ## Not found
 
-<ErrorTable errors={[{"code":"NOT_FOUND","when":"The project/template slug does not exist or is not published."},{"code":"VERSION_NOT_FOUND","when":"The pinned version does not exist for this template."},{"code":"DOCUMENT_NOT_FOUND","when":"No stored document matches the supplied id."},{"code":"GONE","when":"The resource existed but has been deleted."}]} />
+<ErrorTable errors={[{"code":"PROJECT_NOT_FOUND","when":"No project matches the \`project\` slug."},{"code":"PROJECT_NOT_IN_ENVIRONMENT","when":"The project is not published in the key's environment."},{"code":"TEMPLATE_NOT_FOUND","when":"No template matches the \`template\` slug in the published project."},{"code":"DOCUMENT_NOT_FOUND","when":"No stored document matches the supplied id."},{"code":"NOT_FOUND","when":"Generic 404: no resource matched the request."},{"code":"DOCUMENT_GONE","when":"The document existed but has been deleted (410)."}]} />
 
 ## Validation
 
-<ErrorTable errors={[{"code":"VALIDATION_ERROR","when":"\`data\` does not satisfy the template schema."},{"code":"MISSING_DATA","when":"Request body lacks the required \`data\` field."},{"code":"MISSING_PROJECT_OR_TEMPLATE","when":"Project mode call without both project and template."},{"code":"MISSING_TEMPLATE_SLUG","when":"Template slug is missing."},{"code":"PROJECT_REQUIRED_FOR_DOCUMENT","when":"documents.preview requires a project selector."},{"code":"INVALID_VERSION_FORMAT","when":"The version string is not a valid semver."},{"code":"VERSION_REQUIRED","when":"Project mode requires an explicit version selector."},{"code":"INVALID_VERSION_FOR_KEY_ENV","when":"Sandbox key targeting a live-only version, or vice versa."}]} />
+<ErrorTable errors={[{"code":"VALIDATION_ERROR","when":"The request body failed validation, including unknown fields."},{"code":"MISSING_DATA","when":"Request body lacks the required \`data\` field."},{"code":"MISSING_TEMPLATE_SLUG","when":"Template slug is missing."},{"code":"PROJECT_REQUIRED_FOR_DOCUMENT","when":"Storing a document requires a \`project\`."},{"code":"ENVIRONMENT_MISMATCH","when":"The request targets an environment other than the key's."},{"code":"TEMPLATE_ERROR","when":"The template failed to render with the supplied data."},{"code":"EMPTY_DOCUMENT","when":"The render produced a document with no pages."},{"code":"RENDER_BODY_TOO_LARGE","when":"The render request body exceeds the size limit (413)."},{"code":"DOCUMENT_TOO_LARGE","when":"The rendered document exceeds the size limit (413)."}]} />
 
 ## Rate and quota
 
-<ErrorTable errors={[{"code":"QUOTA_EXCEEDED","when":"Per-key rate limit or monthly quota reached. Retryable."},{"code":"OVERAGE_CAP_EXCEEDED","when":"Hard overage cap reached. Not retryable."}]} />
+<ErrorTable errors={[{"code":"RATE_LIMIT_EXCEEDED","when":"Too many requests in the rate-limit window (429). Retryable."},{"code":"QUOTA_EXCEEDED","when":"The organization exceeded its plan quota. Retryable."},{"code":"OVERAGE_CAP_EXCEEDED","when":"The organization exceeded its overage cap."}]} />
 
 ## Server
 
-<ErrorTable errors={[{"code":"INTERNAL_ERROR","when":"The API returned 5xx. Retryable."}]} />
+<ErrorTable errors={[{"code":"INTERNAL_ERROR","when":"The API returned 5xx. Retryable."},{"code":"STORAGE_ACCESS_DENIED","when":"The API could not read or write document storage (502). Retryable."},{"code":"PUBLISH_IN_PROGRESS","when":"A publish holds the project in this environment (503, with \`Retry-After\`). Retryable."},{"code":"ORGANIZATION_MIGRATING","when":"The organization is being migrated (503). Retryable."},{"code":"RENDER_TIMEOUT","when":"The render did not finish in time (504). Retryable."}]} />
 `;
 }

@@ -11,51 +11,57 @@ This page walks through your first render — from key to PDF — without touchi
 
 ## Set your API key
 
-Export your key into the environment your binary runs in:
+Export a sandbox key into the environment your binary runs in (replace `pp_sandbox_x` with your key):
 
 ```bash
-export POLI_PAGE_API_KEY=pp_test_...
+export POLI_PAGE_API_KEY=pp_sandbox_x
 ```
 
 ## Render a PDF
 
+Every organization gets a `getting-started` project with a `welcome` template, published into its `sandbox` environment when the organization is created. A sandbox key renders it with no version:
+
 ```rust
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
 
-    let pdf = client.render.pdf(ProjectModeInput {
-        project: "billing".into(),
-        template: "invoice".into(),
-        version: Some("1.0.0".into()),
-        data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
+    let pdf = client.render.pdf(RenderInput {
+        project: "getting-started".into(),
+        template: "welcome".into(),
+        data: json!({ "name": "SDK Demo" }),
         ..Default::default()
     }).await?;
 
-    std::fs::write("invoice.pdf", &pdf)?;
+    std::fs::write("welcome.pdf", &pdf)?;
     Ok(())
 }
 ```
 
 `pdf` is a `bytes::Bytes`. Write it to disk, stream it to S3, or hand it directly to an HTTP response.
 
+`getting-started` is a normal, editable project: if your organization renamed it, deleted it or removed it from `sandbox`, the API answers `404 PROJECT_NOT_FOUND` or `404 PROJECT_NOT_IN_ENVIRONMENT`. Use a fresh organization in that case.
+
+## Your own templates
+
+A render uses the project's copy published in the API key's environment. Publish your project to that environment, then swap the slugs. To try a template or raw HTML without an API key, use the playground at [play.poli.page](https://play.poli.page).
+
 ## Example
 
 ```rust
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
 
-    let pdf = client.render.pdf(ProjectModeInput {
+    let pdf = client.render.pdf(RenderInput {
         project: "billing".into(),
         template: "invoice".into(),
-        version: Some("1.0.0".into()),
         data: json!({ "invoiceNumber": "INV-001", "total": 1280 }),
         ..Default::default()
     }).await?;
@@ -67,5 +73,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## See also
 - [Authentication](../../concepts/authentication/)
-- [Render modes](../../concepts/render-modes/)
+- [Render input](../../concepts/render-modes/)
 - [Async runtime](../../concepts/async-runtime/)

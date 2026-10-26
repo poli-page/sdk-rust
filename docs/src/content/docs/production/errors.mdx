@@ -10,13 +10,13 @@ Every fallible operation in the crate returns `Result<T, poli_page::Error>`. The
 ## The Error enum
 
 ```rust
-use poli_page::{Error, PoliPage, ProjectModeInput};
+use poli_page::{Error, PoliPage, RenderInput};
 
 #[tokio::main]
 async fn main() {
     let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY").unwrap()).unwrap();
 
-    match client.render.pdf(ProjectModeInput::default()).await {
+    match client.render.pdf(RenderInput::default()).await {
         Ok(pdf) => { let _ = pdf; }
         Err(err) => match err {
             Error::Auth { request_id, .. } => eprintln!("auth failed; req {:?}", request_id),
@@ -51,32 +51,56 @@ These originate inside the SDK before any HTTP call, or in response to a network
 Returned by the Poli Page API and forwarded verbatim on `Error::BadRequest`, `Error::Auth`, `Error::PermissionDenied`, `Error::NotFound`, `Error::Gone`, `Error::RateLimited`, and `Error::Api`.
 
 <ErrorTable errors={[
-  { code: 'INVALID_API_KEY', when: 'The API key is malformed or revoked.', recovery: 'Rotate the key in the dashboard.' },
-  { code: 'MISSING_API_KEY', when: 'No API key was provided in the request.', recovery: 'Check the builder was called with `api_key`.' },
-  { code: 'NOT_FOUND', when: 'The `project/template` slug or `document_id` does not exist.', recovery: 'Verify the slug/id; confirm the template is published in this environment.' },
-  { code: 'VALIDATION_ERROR', when: 'The `data` field does not satisfy the template schema.', recovery: 'Inspect the template schema in the dashboard.' },
-  { code: 'MISSING_DATA', when: 'The request body lacks a required `data` field.', recovery: 'Pass `data: json!({})` (or with values) on every render call.' },
-  { code: 'QUOTA_EXCEEDED', when: 'You exceeded the per-key rate limit or monthly quota.', recovery: 'Automatically retried; bump tier for sustained higher throughput.' },
-  { code: 'PAYMENT_REQUIRED', when: 'The organization`s billing is past due.', recovery: 'Update the payment method in the dashboard.' },
-  { code: 'INTERNAL_ERROR', when: 'The API returned 5xx.', recovery: 'Automatically retried; contact support if it persists.' },
+  { code: 'MISSING_API_KEY', when: 'No API key was provided in the request (401).', recovery: 'Check the builder was called with `api_key`.' },
+  { code: 'INVALID_API_KEY', when: 'The API key is malformed or revoked (401).', recovery: 'Rotate the key in the dashboard.' },
+  { code: 'FORBIDDEN', when: 'The key does not have access to the requested resource (403).', recovery: 'Use a key of the right organization and environment.' },
+  { code: 'ENVIRONMENT_PROTECTED', when: 'The key`s environment is protected against this operation (403).', recovery: 'Use a key of another environment, or change the protection in the dashboard.' },
+  { code: 'THUMBNAILS_NOT_AVAILABLE', when: 'The organization`s plan does not include thumbnails (403).', recovery: 'Upgrade the plan, or skip thumbnails.' },
+  { code: 'ORGANIZATION_PAYMENT_GRACE', when: 'The organization is in its payment grace period (403).', recovery: 'Update the payment method in the dashboard.' },
+  { code: 'ORGANIZATION_CANCELLED', when: 'The organization was cancelled (403).', recovery: 'Reactivate the subscription in the dashboard.' },
+  { code: 'ORGANIZATION_PURGED', when: 'The organization`s data was purged (403).', recovery: 'Contact support.' },
+  { code: 'PROJECT_NOT_FOUND', when: 'No project matches the `project` slug (404).', recovery: 'Verify the slug. A renamed or deleted `getting-started` answers this: use a fresh organization.' },
+  { code: 'PROJECT_NOT_IN_ENVIRONMENT', when: 'The project exists but is not published in the key`s environment (404).', recovery: 'Publish the project to that environment.' },
+  { code: 'TEMPLATE_NOT_FOUND', when: 'No template matches the `template` slug in the published project (404).', recovery: 'Verify the slug and publish the project again.' },
+  { code: 'DOCUMENT_NOT_FOUND', when: 'No stored document matches the `document_id` (404).', recovery: 'Verify the id.' },
+  { code: 'NOT_FOUND', when: 'Generic 404: no resource matched the request.', recovery: 'Verify the request path and ids.' },
+  { code: 'DOCUMENT_GONE', when: 'The document existed but was deleted (410, `Error::Gone`).', recovery: 'Render it again.' },
+  { code: 'VALIDATION_ERROR', when: 'The request body failed validation, including unknown fields (400).', recovery: 'Fix the input; the message names the field.' },
+  { code: 'MISSING_DATA', when: 'The request body lacks the required `data` field (400).', recovery: 'Pass `data: json!({})` (or with values) on every render call.' },
+  { code: 'MISSING_TEMPLATE_SLUG', when: 'The `template` slug is missing (400).', recovery: 'Set `template`.' },
+  { code: 'PROJECT_REQUIRED_FOR_DOCUMENT', when: 'Storing a document requires a `project` (400).', recovery: 'Set `project`.' },
+  { code: 'ENVIRONMENT_MISMATCH', when: 'The request targets an environment other than the key`s (400).', recovery: 'Use a key of the environment you target.' },
+  { code: 'TEMPLATE_ERROR', when: 'The template failed to render with the supplied data (400).', recovery: 'Check the data against the template, for example in the playground.' },
+  { code: 'EMPTY_DOCUMENT', when: 'The render produced a document with no pages (400).', recovery: 'Check the template and data.' },
+  { code: 'RENDER_BODY_TOO_LARGE', when: 'The render request body exceeds the size limit (413).', recovery: 'Send less data.' },
+  { code: 'DOCUMENT_TOO_LARGE', when: 'The rendered document exceeds the size limit (413).', recovery: 'Split the document.' },
+  { code: 'RATE_LIMIT_EXCEEDED', when: 'Too many requests in the rate-limit window (429).', recovery: 'Automatically retried, honouring `Retry-After`.' },
+  { code: 'QUOTA_EXCEEDED', when: 'The organization exceeded its plan quota.', recovery: 'Automatically retried; upgrade the plan for sustained higher volume.' },
+  { code: 'OVERAGE_CAP_EXCEEDED', when: 'The organization exceeded its overage cap.', recovery: 'Raise the cap in the dashboard; retrying does not help until then.' },
+  { code: 'INTERNAL_ERROR', when: 'The API returned a generic 5xx.', recovery: 'Automatically retried; contact support if it persists.' },
+  { code: 'STORAGE_ACCESS_DENIED', when: 'The API could not read or write document storage (502).', recovery: 'Automatically retried; contact support if it persists.' },
+  { code: 'PUBLISH_IN_PROGRESS', when: 'A publish holds the project in this environment (503, with `Retry-After`).', recovery: 'Automatically retried after `Retry-After`.' },
+  { code: 'ORGANIZATION_MIGRATING', when: 'The organization is being migrated (503).', recovery: 'Automatically retried; try again later if it persists.' },
+  { code: 'RENDER_TIMEOUT', when: 'The render did not finish in time (504).', recovery: 'Automatically retried; simplify the template if it persists.' },
 ]} />
+
+`Error::code()` returns the code verbatim, and every code above is a constant in `poli_page::error_codes`. An API that adds a code passes it through unchanged.
 
 The full list of API codes lives in [the reference](../../reference/errors/).
 
 ## Example
 
 ```rust
-use poli_page::{Error, PoliPage, ProjectModeInput};
+use poli_page::{Error, PoliPage, RenderInput};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
 
-    let input = ProjectModeInput {
+    let input = RenderInput {
         project: "billing".into(),
         template: "invoice".into(),
-        version: Some("1.0.0".into()),
         data: json!({ "invoiceNumber": "INV-001" }),
         ..Default::default()
     };

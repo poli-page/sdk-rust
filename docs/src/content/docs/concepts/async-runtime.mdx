@@ -29,7 +29,7 @@ let runtime = tokio::runtime::Builder::new_multi_thread()
     .enable_all()
     .build()?;
 runtime.block_on(async {
-    let client = poli_page::PoliPage::new("pp_test_...").unwrap();
+    let client = poli_page::PoliPage::new("pp_sandbox_x").unwrap();
     let _ = &client.render;
 });
 ```
@@ -40,20 +40,19 @@ For short scripts, CLIs, or callers that already live inside a sync host, enable
 
 ```toml
 [dependencies]
-poli-page = { version = "1.0", features = ["blocking"] }
+poli-page = { version = "0.10", features = ["blocking"] }
 ```
 
 ```rust
 use poli_page::blocking::PoliPage;
-use poli_page::ProjectModeInput;
+use poli_page::RenderInput;
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
-    let pdf = client.render.pdf(ProjectModeInput {
+    let pdf = client.render.pdf(RenderInput {
         project: "billing".into(),
         template: "invoice".into(),
-        version: Some("1.0.0".into()),
         data: json!({ "invoiceNumber": "INV-001" }),
         ..Default::default()
     })?;
@@ -71,7 +70,7 @@ The blocking surface mirrors the async one one-to-one; it just removes the `.awa
 ## Example
 
 ```rust
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 
 #[tokio::main]
@@ -82,10 +81,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..4 {
         let client = client.clone();
         handles.push(tokio::spawn(async move {
-            client.render.pdf(ProjectModeInput {
+            client.render.pdf(RenderInput {
                 project: "billing".into(),
                 template: "invoice".into(),
-                version: Some("1.0.0".into()),
                 data: json!({ "invoiceNumber": format!("INV-{i:03}") }),
                 ..Default::default()
             }).await

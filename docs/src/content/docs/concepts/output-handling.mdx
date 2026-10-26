@@ -8,10 +8,9 @@ The Rust SDK gives you four ways to handle a rendered PDF: in-memory bytes, an a
 ## In-memory (`render.pdf`)
 
 ```rust
-let pdf = client.render.pdf(ProjectModeInput {
+let pdf = client.render.pdf(RenderInput {
     project: "billing".into(),
     template: "invoice".into(),
-    version: Some("1.0.0".into()),
     data: json!({ "invoiceNumber": "INV-001" }),
     ..Default::default()
 }).await?;
@@ -51,7 +50,7 @@ let pdf = doc.download_pdf().await?;
 ## Example
 
 ```rust
-use poli_page::{PoliPage, ProjectModeInput};
+use poli_page::{PoliPage, RenderInput};
 use serde_json::json;
 
 #[tokio::main]
@@ -60,10 +59,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     poli_page::render_to_file(
         &client,
-        ProjectModeInput {
+        RenderInput {
             project: "billing".into(),
             template: "invoice".into(),
-            version: Some("1.0.0".into()),
             data: json!({ "invoiceNumber": "INV-001" }),
             ..Default::default()
         },
