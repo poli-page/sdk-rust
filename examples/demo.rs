@@ -16,7 +16,8 @@
 //! 7. `documents.preview`
 //! 8. `documents.delete`
 //! 9. `not-found`: renders template `does-not-exist` and prints the error's
-//!    code, status, message and request id (`404 TEMPLATE_NOT_FOUND`)
+//!    code, status, message and request id (`404 TEMPLATE_NOT_FOUND`); any
+//!    other error, or a success, fails the demo
 //!
 //! API key resolution:
 //!   1. `POLI_PAGE_API_KEY` environment variable.
@@ -33,7 +34,9 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use poli_page::{Error, PoliPage, RenderInput, ThumbnailFormat, ThumbnailOptions};
+use poli_page::{
+    error_codes, Error, ErrorPayload, PoliPage, RenderInput, ThumbnailFormat, ThumbnailOptions,
+};
 use regex::Regex;
 use serde_json::json;
 
@@ -171,17 +174,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  WARNING: this step is meant to fail. The demo catches the error");
     println!("  and prints it; it is NOT crashing.");
     println!();
-    match client.render.pdf(not_found_input()).await {
-        Ok(_) => return Err("unexpected: the not-found render succeeded".into()),
-        Err(err) => {
-            let payload = err.to_payload();
-            println!("  caught poli_page::Error:");
-            println!("    code       = {}", payload.code);
-            println!("    status     = {}", display_or_none(payload.status));
-            println!("    message    = {}", payload.message);
-            println!("    request_id = {}", display_or_none(payload.request_id));
-        }
-    }
+    let payload = expect_template_not_found(client.render.pdf(not_found_input()).await)?;
+    println!("  caught poli_page::Error:");
+    println!("    code       = {}", payload.code);
+    println!("    status     = {}", display_or_none(payload.status));
+    println!("    message    = {}", payload.message);
+    println!("    request_id = {}", display_or_none(payload.request_id));
 
     println!();
     println!("Done. Output files in: {}", out_dir.display());
@@ -207,6 +205,24 @@ fn not_found_input() -> RenderInput {
         template: "does-not-exist".into(),
         data: json!({}),
         ..Default::default()
+    }
+}
+
+/// The not-found step's check: only `404 TEMPLATE_NOT_FOUND` passes. Any
+/// other error, or a render that succeeds, fails the demo.
+fn expect_template_not_found<T>(
+    result: Result<T, Error>,
+) -> Result<ErrorPayload, Box<dyn std::error::Error>> {
+    match result {
+        Ok(_) => Err("unexpected: the not-found render succeeded".into()),
+        Err(err) => {
+            let payload = err.to_payload();
+            if payload.status == Some(404) && payload.code == error_codes::TEMPLATE_NOT_FOUND {
+                Ok(payload)
+            } else {
+                Err(err.into())
+            }
+        }
     }
 }
 
@@ -401,12 +417,47 @@ mod tests {
             .build()
             .unwrap();
 
-        let err = client.render.pdf(not_found_input()).await.unwrap_err();
-        let payload = err.to_payload();
+        let payload = expect_template_not_found(client.render.pdf(not_found_input()).await)
+            .expect("404 TEMPLATE_NOT_FOUND passes the not-found step");
 
         assert_eq!(payload.code, "TEMPLATE_NOT_FOUND");
         assert_eq!(payload.status, Some(404));
         assert_eq!(payload.message, "Template does-not-exist not found");
         assert_eq!(payload.request_id.as_deref(), Some("req_not_found"));
+    }
+
+    #[test]
+    fn not_found_step_fails_when_the_render_succeeds() {
+        assert!(expect_template_not_found(Ok(())).is_err());
+    }
+
+    #[tokio::test]
+    async fn not_found_step_fails_on_any_other_error() {
+        for (status, code) in [
+            (404, "PROJECT_NOT_FOUND"),
+            (404, "PROJECT_NOT_IN_ENVIRONMENT"),
+            (401, "INVALID_API_KEY"),
+            (400, "TEMPLATE_NOT_FOUND"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/render"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_json(json!({ "error": code, "detail": "nope" })),
+                )
+                .mount(&server)
+                .await;
+            let client = PoliPage::builder()
+                .api_key(key("sandbox"))
+                .base_url(server.uri())
+                .max_retries(0)
+                .build()
+                .unwrap();
+
+            let result = expect_template_not_found(client.render.pdf(not_found_input()).await);
+
+            assert!(result.is_err(), "{status} {code} must fail the step");
+        }
     }
 }

@@ -37,7 +37,7 @@ The SDK still sends the key as-is and never checks it. A full key matches:
 | `Environment` enum | Removed; compare the string |
 | `ThumbnailOptions::new(width)` | `ThumbnailOptions::new().width(width)`; every option is optional and `ThumbnailOptions` derives `Default` |
 | `documents.thumbnails(id, ThumbnailOptions)` | `documents.thumbnails(id, Option<ThumbnailOptions>)`; `None` uses the API defaults (width 400, JPEG) |
-| — | `ThumbnailFormat::Webp` |
+| — | `ThumbnailFormat::Webp`. The enum is not `#[non_exhaustive]`: an exhaustive `match` on `ThumbnailFormat` needs a `Webp` arm |
 
 Before:
 
@@ -70,6 +70,10 @@ let thumbs = client
     .thumbnails(&id, Some(ThumbnailOptions::new().width(320)))
     .await?;
 ```
+
+An omitted `format` gives JPEG, the API's default, including when only
+`width` is set. 0.9.0 documented PNG as the default; to get PNG, set
+`format: Some(ThumbnailFormat::Png)`.
 
 ### Error codes
 

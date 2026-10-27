@@ -41,8 +41,8 @@ authenticated preview and inline-HTML rendering.
   is `Option<u32>`, `ThumbnailOptions` derives `Default`,
   `ThumbnailOptions::new()` takes no argument and `.width(n)` sets the
   width. With no option set the body is `{}` and the API defaults apply
-  (width 400, JPEG). The SDK does not check bounds; the API answers
-  `400 VALIDATION_ERROR`.
+  (width 400, JPEG; 0.9.0 documented PNG). The SDK does not check bounds;
+  the API answers `400 VALIDATION_ERROR`.
 - `documents.delete` is documented as idempotent: it resolves on `204`,
   including for an already-deleted document.
 - Doc examples use `pp_sandbox_...` keys; a key is `pp_{env}_{32 hex}`.
@@ -60,15 +60,16 @@ authenticated preview and inline-HTML rendering.
   the key-format regex only, renders `getting-started`/`welcome` with
   `{ "name": "SDK Demo" }`, and ends with the `not-found` step (template
   `does-not-exist`, `404 TEMPLATE_NOT_FOUND`), which prints the error's
-  code, status, message and request id. An empty `POLI_PAGE_BASE_URL`
-  counts as unset.
+  code, status, message and request id; any other error, or a success,
+  fails the demo. An empty `POLI_PAGE_BASE_URL` counts as unset.
 - Integration workflow: an unset `POLI_PAGE_TEST_BASE_URL` secret (which
   GitHub Actions passes as an empty string) is dropped, so the SDK's
   default base URL applies.
 
 ### Added
 
-- `ThumbnailFormat::Webp`.
+- **BREAKING**: `ThumbnailFormat::Webp`. `ThumbnailFormat` is not
+  `#[non_exhaustive]`, so an exhaustive `match` on it needs a `Webp` arm.
 - Known error codes `PUBLISH_IN_PROGRESS` (503, retried like any 5xx,
   honouring `Retry-After`), `ENVIRONMENT_MISMATCH`,
   `PROJECT_NOT_IN_ENVIRONMENT`, `TEMPLATE_NOT_FOUND`, `DOCUMENT_GONE`,

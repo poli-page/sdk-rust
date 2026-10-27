@@ -10,7 +10,7 @@ The Poli Page Rust SDK retries transient failures automatically. Render operatio
 - `Error::Connection`, `Error::Timeout`, 5xx responses (including `503 PUBLISH_IN_PROGRESS` while a publish holds the project) and 429 (`RateLimited`) are retried.
 - Up to `max_retries` attempts (default `2` — three total attempts).
 - Exponential backoff starting at `retry_delay` (default 500 ms), doubling each attempt, plus jitter.
-- Honors the `Retry-After` response header when present.
+- Honors the `Retry-After` response header when present, capped at 30 seconds: a longer `Retry-After` is retried after 30 s and can use up `max_retries`.
 - `Error::Aborted` is never retried.
 
 ## Disabling retries

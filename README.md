@@ -32,6 +32,9 @@ cargo add poli-page serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
+`cargo add` and a `"0.10"` requirement never pick a prerelease. To opt in
+to one, pin it exactly, e.g. `cargo add poli-page@1.0.0-rc.1`.
+
 Requires Rust 1.93 or later. See [MSRV policy](#msrv) below.
 
 ## Quick start
@@ -136,7 +139,7 @@ The demo exercises every public method end-to-end against the API. It reads `POL
 6. `documents.thumbnails` (the demo carries on if the organization's plan does not include thumbnails: the API answers `403 THUMBNAILS_NOT_AVAILABLE`)
 7. `documents.preview`
 8. `documents.delete`
-9. `not-found`: renders template `does-not-exist` with empty data. The API answers `404 TEMPLATE_NOT_FOUND`, and the demo prints the error's code, status, message and request id.
+9. `not-found`: renders template `does-not-exist` with empty data. The API answers `404 TEMPLATE_NOT_FOUND`, and the demo prints the error's code, status, message and request id. Any other error, or a success, fails the demo.
 
 ### Blocking
 
