@@ -25,71 +25,122 @@ interface MethodTarget {
   readonly locate: (td: RustdocCrate) => Item | undefined;
 }
 
+// Error tables: what each method can return, from `src/` (client.rs,
+// render.rs, documents.rs, fs.rs) and the API spec's routes. Every code must
+// be defined in `src/error.rs`; `buildMethodPages` checks it.
+
+// Every HTTP call: `Error::Timeout` / `Error::Connection` (client.rs).
+const TRANSPORT = ['timeout', 'network_error'];
+// Every `/v1/*` route: a non-`pp_` bearer goes the session path and gets
+// MISSING_API_KEY; a purged org refuses all; a BYO org whose role cannot be
+// assumed gets STORAGE_ACCESS_DENIED; INTERNAL_ERROR is a 5xx, a non-JSON
+// error body or a response the SDK cannot parse.
+const ANY_V1_CALL = ['MISSING_API_KEY', 'INVALID_API_KEY', 'ORGANIZATION_PURGED', 'STORAGE_ACCESS_DENIED', 'INTERNAL_ERROR'];
+// Org-state gates on writes (any method but GET).
+const WRITE_GATES = ['ORGANIZATION_PAYMENT_GRACE', 'ORGANIZATION_CANCELLED', 'ORGANIZATION_MIGRATING'];
+// `POST /v1/render`. No ENVIRONMENT_MISMATCH: `RenderInput` sends no
+// `environment`. RATE_LIMIT_EXCEEDED throttles `/v1/render*` only.
+const RENDER = [
+  'VALIDATION_ERROR', 'MISSING_DATA', 'MISSING_TEMPLATE_SLUG', 'PROJECT_REQUIRED_FOR_DOCUMENT',
+  'TEMPLATE_ERROR', 'EMPTY_DOCUMENT', 'PROJECT_NOT_FOUND', 'PROJECT_NOT_IN_ENVIRONMENT', 'TEMPLATE_NOT_FOUND',
+  'RENDER_BODY_TOO_LARGE', 'DOCUMENT_TOO_LARGE', 'QUOTA_EXCEEDED', 'OVERAGE_CAP_EXCEEDED',
+  'RATE_LIMIT_EXCEEDED', 'PUBLISH_IN_PROGRESS', 'RENDER_TIMEOUT',
+  ...WRITE_GATES, ...ANY_V1_CALL, ...TRANSPORT,
+];
+// The presigned-URL fetch after the render (`Error::Download`).
+const RENDER_THEN_DOWNLOAD = [...RENDER, 'DOWNLOAD_FAILED'];
+// `GET /v1/documents/:id` and `/preview`: reads, so no write gate.
+const DOCUMENT_READ = ['DOCUMENT_NOT_FOUND', 'FORBIDDEN', 'DOCUMENT_GONE', ...ANY_V1_CALL, ...TRANSPORT];
+
 const METHODS: readonly MethodTarget[] = [
   {
     slug: 'render-pdf',
     displayName: 'client.render.pdf',
     exampleFile: 'render-pdf.rs',
-    errorCodes: ['VALIDATION_ERROR', 'PROJECT_NOT_FOUND', 'PROJECT_NOT_IN_ENVIRONMENT', 'TEMPLATE_NOT_FOUND', 'QUOTA_EXCEEDED', 'RATE_LIMIT_EXCEEDED', 'PUBLISH_IN_PROGRESS', 'timeout', 'network_error', 'INTERNAL_ERROR'],
+    errorCodes: RENDER_THEN_DOWNLOAD,
     locate: (td) => findMethodOn(td, 'Render', 'pdf'),
   },
   {
     slug: 'render-pdf-stream',
     displayName: 'client.render.pdf_stream',
     exampleFile: 'render-pdf-stream.rs',
-    errorCodes: ['VALIDATION_ERROR', 'PROJECT_NOT_FOUND', 'PROJECT_NOT_IN_ENVIRONMENT', 'TEMPLATE_NOT_FOUND', 'QUOTA_EXCEEDED', 'RATE_LIMIT_EXCEEDED', 'PUBLISH_IN_PROGRESS', 'timeout', 'network_error', 'INTERNAL_ERROR'],
+    errorCodes: RENDER_THEN_DOWNLOAD,
     locate: (td) => findMethodOn(td, 'Render', 'pdf_stream'),
   },
   {
     slug: 'render-document',
     displayName: 'client.render.document',
     exampleFile: 'render-document.rs',
-    errorCodes: ['VALIDATION_ERROR', 'PROJECT_NOT_FOUND', 'PROJECT_NOT_IN_ENVIRONMENT', 'TEMPLATE_NOT_FOUND', 'QUOTA_EXCEEDED', 'RATE_LIMIT_EXCEEDED', 'PUBLISH_IN_PROGRESS', 'INTERNAL_ERROR'],
+    errorCodes: RENDER,
     locate: (td) => findMethodOn(td, 'Render', 'document'),
   },
   {
     slug: 'documents-get',
     displayName: 'client.documents.get',
     exampleFile: 'documents-get.rs',
-    errorCodes: ['DOCUMENT_NOT_FOUND', 'DOCUMENT_GONE', 'INVALID_API_KEY', 'INTERNAL_ERROR'],
+    errorCodes: DOCUMENT_READ,
     locate: (td) => findMethodOn(td, 'Documents', 'get'),
   },
   {
     slug: 'documents-preview',
     displayName: 'client.documents.preview',
     exampleFile: 'documents-preview.rs',
-    errorCodes: ['DOCUMENT_NOT_FOUND', 'DOCUMENT_GONE', 'INVALID_API_KEY', 'INTERNAL_ERROR'],
+    errorCodes: DOCUMENT_READ,
     locate: (td) => findMethodOn(td, 'Documents', 'preview'),
   },
   {
     slug: 'documents-thumbnails',
     displayName: 'client.documents.thumbnails',
     exampleFile: 'documents-thumbnails.rs',
-    errorCodes: ['DOCUMENT_NOT_FOUND', 'DOCUMENT_GONE', 'VALIDATION_ERROR', 'THUMBNAILS_NOT_AVAILABLE', 'INVALID_API_KEY', 'INTERNAL_ERROR'],
+    errorCodes: [
+      'DOCUMENT_NOT_FOUND', 'FORBIDDEN', 'DOCUMENT_GONE', 'THUMBNAILS_NOT_AVAILABLE', 'VALIDATION_ERROR',
+      'QUOTA_EXCEEDED', 'OVERAGE_CAP_EXCEEDED', ...WRITE_GATES, ...ANY_V1_CALL, ...TRANSPORT,
+    ],
     locate: (td) => findMethodOn(td, 'Documents', 'thumbnails'),
   },
   {
     slug: 'documents-delete',
     displayName: 'client.documents.delete',
     exampleFile: 'documents-delete.rs',
-    errorCodes: ['DOCUMENT_NOT_FOUND', 'INVALID_API_KEY', 'INTERNAL_ERROR'],
+    // No DOCUMENT_GONE: deleting a deleted document answers 204.
+    errorCodes: [
+      'DOCUMENT_NOT_FOUND', 'FORBIDDEN', 'ENVIRONMENT_PROTECTED', ...WRITE_GATES, ...ANY_V1_CALL, ...TRANSPORT,
+    ],
     locate: (td) => findMethodOn(td, 'Documents', 'delete'),
   },
   {
     slug: 'render-to-file',
     displayName: 'render_to_file',
     exampleFile: 'render-to-file.rs',
-    errorCodes: ['VALIDATION_ERROR', 'PROJECT_NOT_FOUND', 'PROJECT_NOT_IN_ENVIRONMENT', 'TEMPLATE_NOT_FOUND', 'QUOTA_EXCEEDED', 'RATE_LIMIT_EXCEEDED', 'PUBLISH_IN_PROGRESS', 'timeout', 'network_error', 'INTERNAL_ERROR'],
+    // invalid_options: creating, writing or flushing the file failed (fs.rs).
+    errorCodes: [...RENDER_THEN_DOWNLOAD, 'invalid_options'],
     locate: (td) => findTopLevelFunction(td, 'render_to_file'),
   },
 ];
+
+// Codes `src/error.rs` defines: the `error_codes` constants and the fixed
+// codes `Error::code` returns for the SDK-side variants.
+function definedErrorCodes(repoRoot: string): Set<string> {
+  const src = readFileSync(join(repoRoot, 'src', 'error.rs'), 'utf8');
+  const constants = [...src.matchAll(/pub const [A-Z_]+: &str = "([^"]+)";/g)].map((m) => m[1]!);
+  const reserved = [...src.matchAll(/Error::\w+(?: \{ \.\. \})? => "([^"]+)",/g)].map((m) => m[1]!);
+  if (constants.length === 0 || reserved.length === 0) {
+    throw new Error('extractor: could not read the error codes from src/error.rs');
+  }
+  return new Set([...constants, ...reserved]);
+}
 
 export function buildMethodPages(
   td: RustdocCrate,
   repoRoot: string,
 ): Array<{ slug: string; mdx: string }> {
+  const defined = definedErrorCodes(repoRoot);
   const pages: Array<{ slug: string; mdx: string }> = [];
   for (const target of METHODS) {
+    const unknown = target.errorCodes.filter((code) => !defined.has(code));
+    if (unknown.length > 0) {
+      throw new Error(`extractor: ${target.displayName} lists codes not defined in src/error.rs: ${unknown.join(', ')}`);
+    }
     const item = target.locate(td);
     if (!item) {
       throw new Error(`extractor: could not find ${target.displayName} in rustdoc JSON`);
