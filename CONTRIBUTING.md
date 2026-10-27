@@ -122,10 +122,11 @@ only needed for the local `scripts/release.sh` fallback.
 ### Stable vs. prerelease
 
 Cargo uses semver prerelease suffixes natively. `cargo add poli-page`
-ignores prereleases; users opt in by pinning explicitly:
+ignores prereleases; users opt in by pinning explicitly (no prerelease
+has been published yet; `X.Y.Z-rc.1` stands for the real version):
 
 ```bash
-cargo add poli-page@1.0.0-rc.1
+cargo add poli-page@X.Y.Z-rc.1
 ```
 
 To cut a prerelease:

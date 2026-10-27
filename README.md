@@ -32,8 +32,10 @@ cargo add poli-page serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-`cargo add` and a `"0.10"` requirement never pick a prerelease. To opt in
-to one, pin it exactly, e.g. `cargo add poli-page@1.0.0-rc.1`.
+`cargo add` and a `"0.10"` requirement never pick a prerelease. No
+prerelease has been published yet. Once one is on crates.io (a version such
+as `X.Y.Z-rc.1`, see [CONTRIBUTING.md](CONTRIBUTING.md#stable-vs-prerelease)),
+pin it exactly: `cargo add poli-page@X.Y.Z-rc.1`.
 
 Requires Rust 1.93 or later. See [MSRV policy](#msrv) below.
 
