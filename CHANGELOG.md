@@ -8,7 +8,7 @@ Breaking changes and their upgrade path are summarized in [MIGRATION.md](MIGRATI
 
 ## [Unreleased]
 
-## [0.10.0] - 2026-10-26
+## [0.10.0] - 2026-10-27
 
 Implements the Poli Page environments contract. Breaking, with no
 deprecation window: the API has dropped template versions, the
