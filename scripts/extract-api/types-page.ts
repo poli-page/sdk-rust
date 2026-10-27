@@ -10,9 +10,6 @@ const PUBLIC_TYPES: readonly string[] = [
   'Documents',
   'PdfByteStream',
   'RenderInput',
-  'ProjectModeInput',
-  'InlineModeInput',
-  'PreviewResult',
   'DocumentDescriptor',
   'DocumentPreviewResult',
   'Thumbnail',
@@ -20,12 +17,15 @@ const PUBLIC_TYPES: readonly string[] = [
   'ThumbnailFormat',
   'PageFormat',
   'Orientation',
-  'Environment',
   'MetadataValue',
   'RenderMetadata',
   'RetryEvent',
   'Error',
+  'ErrorPayload',
 ];
+
+// The sample import names only crate-root re-exports.
+const ROOT_IMPORTS: readonly string[] = ['PoliPage', 'RenderInput', 'DocumentDescriptor', 'Error'];
 
 export function buildTypesPage(td: RustdocCrate): string {
   const blocks: string[] = [];
@@ -41,10 +41,10 @@ title: Types
 description: Public types and traits exported from the poli-page crate.
 ---
 
-The Rust SDK exposes the public types below. Import them from the crate root:
+The Rust SDK exposes the public types below. Import them from the crate root (\`PdfByteStream\` from \`poli_page::client\`):
 
 \`\`\`rust
-use poli_page::{${PUBLIC_TYPES.slice(0, 5).join(', ')}};
+use poli_page::{${ROOT_IMPORTS.join(', ')}};
 \`\`\`
 
 ${blocks.join('\n')}

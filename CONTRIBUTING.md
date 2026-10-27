@@ -96,7 +96,7 @@ behind us.
 2. Move `[Unreleased]` → `[X.Y.Z] - YYYY-MM-DD` in `CHANGELOG.md`. Keep the
    heading exactly `## [X.Y.Z] - YYYY-MM-DD` — the workflow extracts that
    section verbatim as the GitHub Release notes.
-3. If MAJOR, add a section to `MIGRATION.md`.
+3. If the release is breaking (a MAJOR, or a MINOR while on `0.x`), add a section to `MIGRATION.md`.
 4. Commit on `main`: `chore(release): vX.Y.Z`, push, and wait for `CI` to
    go green (`gh run watch`).
 5. Tag the same version and push the tag:
@@ -122,10 +122,11 @@ only needed for the local `scripts/release.sh` fallback.
 ### Stable vs. prerelease
 
 Cargo uses semver prerelease suffixes natively. `cargo add poli-page`
-ignores prereleases; users opt in by pinning explicitly:
+ignores prereleases; users opt in by pinning explicitly (no prerelease
+has been published yet; `X.Y.Z-rc.1` stands for the real version):
 
 ```bash
-cargo add poli-page@1.0.0-rc.1
+cargo add poli-page@X.Y.Z-rc.1
 ```
 
 To cut a prerelease:

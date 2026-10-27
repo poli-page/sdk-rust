@@ -4,9 +4,11 @@ All notable changes to `poli-page` (Rust) are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-Breaking changes between major versions are summarized in [MIGRATION.md](MIGRATION.md).
+Breaking changes and their upgrade path are summarized in [MIGRATION.md](MIGRATION.md).
 
 ## [Unreleased]
+
+## [0.10.0] - 2026-10-26
 
 Implements the Poli Page environments contract. Breaking, with no
 deprecation window: the API has dropped template versions, the
@@ -39,17 +41,35 @@ authenticated preview and inline-HTML rendering.
   is `Option<u32>`, `ThumbnailOptions` derives `Default`,
   `ThumbnailOptions::new()` takes no argument and `.width(n)` sets the
   width. With no option set the body is `{}` and the API defaults apply
-  (width 400, JPEG). The SDK does not check bounds; the API answers
-  `400 VALIDATION_ERROR`.
+  (width 400, JPEG; 0.9.0 documented PNG). The SDK does not check bounds;
+  the API answers `400 VALIDATION_ERROR`.
 - `documents.delete` is documented as idempotent: it resolves on `204`,
   including for an already-deleted document.
 - Doc examples use `pp_sandbox_...` keys; a key is `pp_{env}_{32 hex}`.
 - The integration test renders `getting-started`/`welcome` with no version
   (`POLI_PAGE_TEST_VERSION` is gone).
+- README and docs site: the quick start renders `getting-started`/`welcome`
+  with a sandbox key and no version; "Authentication & environments" has
+  the key format and regex, the environment table, the sandbox properties
+  (watermarked, not counted, 30-day expiry) and the `poli-watermark` note;
+  the preview / inline-HTML sections are replaced by a link to the
+  playground (https://play.poli.page); the errors pages list the current
+  API codes; the install snippets use `poli-page = "0.10"`.
+- Demo (`cargo run --example demo`): asks for a sandbox key at
+  `https://app.poli.page/orgs/{YOUR_ORG}/keys`, checks a pasted key against
+  the key-format regex only, renders `getting-started`/`welcome` with
+  `{ "name": "SDK Demo" }`, and ends with the `not-found` step (template
+  `does-not-exist`, `404 TEMPLATE_NOT_FOUND`), which prints the error's
+  code, status, message and request id; any other error, or a success,
+  fails the demo. An empty `POLI_PAGE_BASE_URL` counts as unset.
+- Integration workflow: an unset `POLI_PAGE_TEST_BASE_URL` secret (which
+  GitHub Actions passes as an empty string) is dropped, so the SDK's
+  default base URL applies.
 
 ### Added
 
-- `ThumbnailFormat::Webp`.
+- **BREAKING**: `ThumbnailFormat::Webp`. `ThumbnailFormat` is not
+  `#[non_exhaustive]`, so an exhaustive `match` on it needs a `Webp` arm.
 - Known error codes `PUBLISH_IN_PROGRESS` (503, retried like any 5xx,
   honouring `Retry-After`), `ENVIRONMENT_MISMATCH`,
   `PROJECT_NOT_IN_ENVIRONMENT`, `TEMPLATE_NOT_FOUND`, `DOCUMENT_GONE`,

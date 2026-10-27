@@ -7,7 +7,7 @@ The `PoliPageBuilder` accepts every configurable option as a chainable setter. O
 
 ## Available options
 
-- `api_key` (required) — your `pp_test_` or `pp_live_` key.
+- `api_key` (required) — your API key. It names its environment (`pp_{env}_…`); see [Authentication](../authentication/).
 - `base_url` — override the API endpoint. Defaults to `https://api.poli.page`.
 - `timeout` — per-attempt timeout (`std::time::Duration`). Defaults to 60 seconds.
 - `max_retries` — maximum retry attempts on retryable errors. Defaults to `2` (three total attempts).

@@ -9,10 +9,16 @@ name: integration
 #   - push to main:    catch regressions on the integration branch promptly.
 #   - workflow_dispatch: manual re-run from the Actions tab when needed.
 #
-# Requires the `POLI_PAGE_API_KEY` repository secret. The `if:` on the job
-# skips it on forks (where the secret isn't available), so fork PRs that
-# trigger this via push-to-main on a downstream branch fail-soft rather
-# than fail-hard.
+# Secrets:
+#   - POLI_PAGE_API_KEY: a `pp_sandbox_` key of an organization whose
+#     `getting-started` project is untouched (the suite renders
+#     getting-started/welcome with no version). Unset: the job logs a skip
+#     and succeeds.
+#   - POLI_PAGE_TEST_BASE_URL (optional): API base URL. Unset: the SDK
+#     default applies.
+# The `if:` on the job skips it on forks (where the secrets aren't
+# available), so fork PRs that trigger this via push-to-main on a
+# downstream branch fail-soft rather than fail-hard.
 
 on:
   schedule:
@@ -53,6 +59,11 @@ jobs:
           if [ -z "$POLI_PAGE_API_KEY" ]; then
             echo "POLI_PAGE_API_KEY secret not set — skipping integration tests"
             exit 0
+          fi
+          # An unset secret arrives as "", which the tests would take as the
+          # base URL; drop it so the SDK default applies.
+          if [ -z "$POLI_PAGE_TEST_BASE_URL" ]; then
+            unset POLI_PAGE_TEST_BASE_URL
           fi
           cargo test \
             --features integration \

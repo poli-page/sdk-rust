@@ -1,16 +1,48 @@
 ---
 title: Migration
-description: Upgrade guides for moving between major versions of the Rust SDK.
+description: Upgrade guides for moving between breaking versions of the Rust SDK.
 ---
 
-This page tracks breaking changes between major versions of the `poli-page` crate. For the full per-release diff, see the [changelog](../changelog/).
+This page tracks breaking changes between versions of the `poli-page` crate. Before `1.0.0`, a breaking change bumps the minor version. For the full per-release diff, see the [changelog](../changelog/), and for every before/after table, [`MIGRATION.md` in the repo](https://github.com/poli-page/sdk-rust/blob/main/MIGRATION.md).
 
-## v1.0
+## From 0.9.x to 0.10.0
 
-The first stable release. The full v1.0 surface is documented in [`MIGRATION.md` in the repo](https://github.com/poli-page/sdk-rust/blob/main/MIGRATION.md).
+The API moved from template versions to environments. An API key belongs to one environment, and a render uses the project's copy published in that environment.
 
-Short version: every render call now goes through a namespace (`client.render.pdf`, `client.render.preview`, `client.render.document`), all PDF-producing methods require project mode (with an explicit `version`), and inline mode is supported only on `render.preview`. The synchronous wrapper moved behind the `blocking` Cargo feature.
+- **API keys**: a key is `pp_{env}_` followed by 32 lowercase hex characters (`pp_sandbox_…`, `pp_live_…`). The `pp_test_` and `pp_sa_` prefixes are gone: replace a `pp_test_` key with a `pp_sandbox_` key.
+- **Render input**: `ProjectModeInput` is renamed `RenderInput` and is the only render input. Drop its `version` field: there is no version to pick. `DocumentDescriptor::version` is removed too.
+- **Preview and inline HTML**: `render.preview`, `PreviewResult`, `InlineModeInput` and the old `RenderInput` enum are removed. Try a template or raw HTML in the playground at [play.poli.page](https://play.poli.page). `documents.preview(id)` stays.
+- **Environments**: `DocumentDescriptor::environment` is a `String` with any environment name; the `Environment` enum is removed.
+- **Thumbnails**: `documents.thumbnails(id, options)` takes `Option<ThumbnailOptions>`, and `ThumbnailOptions::new()` takes no argument (`.width(n)` sets the width). An omitted `format` gives JPEG, the API's default (0.9.0 documented PNG): set `format: Some(ThumbnailFormat::Png)` to get PNG. `ThumbnailFormat::Webp` is new; the enum is not `#[non_exhaustive]`, so an exhaustive `match` on it needs a `Webp` arm.
+- **Error codes**: the version codes, `MISSING_PROJECT_OR_TEMPLATE`, `GONE` (now `410 DOCUMENT_GONE`) and `PAYMENT_REQUIRED` (now `403 ORGANIZATION_PAYMENT_GRACE`) are removed. `PROJECT_NOT_FOUND`, `PROJECT_NOT_IN_ENVIRONMENT`, `TEMPLATE_NOT_FOUND`, `PUBLISH_IN_PROGRESS` and others are new; see [Errors](../../production/errors/).
+
+## 0.9.0
+
+The first release of the Rust SDK on crates.io: no migration needed.
+
+## Example
+
+```rust
+use poli_page::{PoliPage, RenderInput};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = PoliPage::new(std::env::var("POLI_PAGE_API_KEY")?)?;
+
+    // 0.9.x took ProjectModeInput with a `version`; 0.10.0 has neither.
+    let pdf = client.render.pdf(RenderInput {
+        project: "getting-started".into(),
+        template: "welcome".into(),
+        data: json!({ "name": "SDK Demo" }),
+        ..Default::default()
+    }).await?;
+
+    std::fs::write("welcome.pdf", &pdf)?;
+    Ok(())
+}
+```
 
 ## See also
 - [Changelog](../changelog/)
-- [Render modes](../../concepts/render-modes/)
+- [Render input](../../concepts/render-modes/)
