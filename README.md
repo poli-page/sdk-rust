@@ -28,11 +28,11 @@ tokio      = { version = "1", features = ["macros", "rt-multi-thread"] }
 Or via `cargo add`:
 
 ```bash
-cargo add poli-page serde_json
+cargo add poli-page@0.10 serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-`cargo add` and a `"0.10"` requirement never pick a prerelease. No
+`poli-page@0.10` and a `"0.10"` requirement never pick a prerelease. No
 prerelease has been published yet. Once one is on crates.io (a version such
 as `X.Y.Z-rc.1`, see [CONTRIBUTING.md](CONTRIBUTING.md#stable-vs-prerelease)),
 pin it exactly: `cargo add poli-page@X.Y.Z-rc.1`.
@@ -225,7 +225,7 @@ An API key belongs to one environment of your organization, and its text names t
 
 "Counted" means the render counts toward the organization's monthly PDF quota. `sandbox` documents are watermarked, are not counted and expire 30 days after creation. There is no watermark option: a template that wants a watermark outside `sandbox` uses the `poli-watermark` class.
 
-Standard and service keys share this one format. A render uses the project's copy published in the key's environment, and `DocumentDescriptor::environment` reports the environment a document was rendered in. Every key uses the same endpoint, `https://api.poli.page`. The SDK sends the key as a Bearer token and never inspects or validates it.
+Standard and service keys share this one format. A render uses the project's copy published in the key's environment, and `DocumentDescriptor::environment` reports the environment a document was rendered in. Every key uses the same endpoint, `https://api.poli.page`. The SDK sends the key as a Bearer token. It does not check the key's format or environment: only an empty key is rejected, with `Error::InvalidOptions`, when the client is built.
 
 ## Methods
 

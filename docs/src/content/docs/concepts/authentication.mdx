@@ -17,7 +17,7 @@ A key is `pp_{env}_` followed by 32 lowercase hex characters, where `{env}` is t
 ^pp_(?=[a-z][a-z0-9-]{0,19}_)[a-z][a-z0-9]*(?:-[a-z0-9]+)*_[0-9a-f]{32}$
 ```
 
-Standard and service keys share this one format. The SDK sends the key as a Bearer token and never inspects or validates it. Pass the key to the client constructor:
+Standard and service keys share this one format. The SDK sends the key as a Bearer token. It does not check the key's format or environment: only an empty key is rejected, with `Error::InvalidOptions`, when the client is built. Pass the key to the client constructor:
 
 ```rust
 use poli_page::PoliPage;
