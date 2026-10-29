@@ -79,6 +79,15 @@ Conformance with the Poli Page API contract v1.2.0
   `requestId` serialize as `null` when unknown, as before.
 - A retry wait is never shorter than its delay: if the timer wakes early, the
   SDK sleeps again for the rest.
+- **BREAKING**: `PageFormat`, `Orientation` and `ThumbnailFormat` keep a value
+  the SDK does not know: their catch-all is `Unknown(String)`, holding the
+  wire value verbatim, and it serializes back unchanged (it was a
+  payload-less `Unknown` that dropped the value, spec §10). The enums are no
+  longer `Copy` (they are `Clone`, `Eq` and `Hash`); they gain `as_str()`,
+  `Display` and `From<&str>` / `From<String>`, which map the known wire values
+  to their variant.
+- A retry with no delay (`Retry-After: 0`) still yields to the runtime once
+  before the next attempt.
 - The minimum `reqwest` is 0.12.28.
 
 ### Added
@@ -99,8 +108,9 @@ Conformance with the Poli Page API contract v1.2.0
 - A request is never resent behind the SDK's back. reqwest's default retry
   policy resent a request the server refused over HTTP/2 (`REFUSED_STREAM`, a
   graceful `GOAWAY`) on its own: `on_request` did not see that send,
-  `max_retries` did not count it, and as the API does not deduplicate on
-  `Idempotency-Key`, a render could be stored twice. The SDK's own client
+  `max_retries` did not count it. Those were sends of a request the server
+  said it never processed (RFC 9113 §8.7), so no render was stored twice,
+  but they were sends the SDK neither counted nor reported. The SDK's own client
   turns that policy off, so the failure surfaces as `network_error` and goes
   through the SDK's retry. HTTP/2 is not one of the SDK's reqwest features,
   but Cargo turns it on when the application's own reqwest has it. A client

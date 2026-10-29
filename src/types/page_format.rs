@@ -1,53 +1,46 @@
 //! Page-format and orientation enums (spec §3.4, Node `types.ts:7-21`).
 //!
-//! Both enums carry a `#[serde(other)]` catch-all so a server-side enum
-//! extension is a silent no-op for old SDK versions — per the forward-compat
-//! posture in spec §9.2.
+//! Both are open sets: a value the API adds lands in `Unknown(String)`,
+//! verbatim, and serializes back unchanged (spec §10).
 
-/// Canonical Poli Page page formats. The full list mirrors the Node SDK.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PageFormat {
-    /// ISO A3 (297 × 420 mm).
-    A3,
-    /// ISO A4 (210 × 297 mm) — the default for most templates.
-    A4,
-    /// ISO A5 (148 × 210 mm).
-    A5,
-    /// ISO A6 (105 × 148 mm).
-    A6,
-    /// ISO B4 (250 × 353 mm).
-    B4,
-    /// ISO B5 (176 × 250 mm).
-    B5,
-    /// US Letter (8.5 × 11 in).
-    Letter,
-    /// US Legal (8.5 × 14 in).
-    Legal,
-    /// US Tabloid / Ledger (11 × 17 in).
-    Tabloid,
-    /// US Executive (7.25 × 10.5 in).
-    Executive,
-    /// US Statement (5.5 × 8.5 in).
-    Statement,
-    /// US Folio (8.5 × 13 in).
-    Folio,
-    /// Catch-all for values the SDK doesn't yet recognise (server added a new
-    /// format). The raw string is not preserved at v1.0 — see spec §9.2.
-    #[serde(other)]
-    Unknown,
+open_string_enum! {
+    /// Canonical Poli Page page formats. The full list mirrors the Node SDK.
+    pub enum PageFormat {
+        /// ISO A3 (297 × 420 mm).
+        A3 = "A3",
+        /// ISO A4 (210 × 297 mm) — the default for most templates.
+        A4 = "A4",
+        /// ISO A5 (148 × 210 mm).
+        A5 = "A5",
+        /// ISO A6 (105 × 148 mm).
+        A6 = "A6",
+        /// ISO B4 (250 × 353 mm).
+        B4 = "B4",
+        /// ISO B5 (176 × 250 mm).
+        B5 = "B5",
+        /// US Letter (8.5 × 11 in).
+        Letter = "Letter",
+        /// US Legal (8.5 × 14 in).
+        Legal = "Legal",
+        /// US Tabloid / Ledger (11 × 17 in).
+        Tabloid = "Tabloid",
+        /// US Executive (7.25 × 10.5 in).
+        Executive = "Executive",
+        /// US Statement (5.5 × 8.5 in).
+        Statement = "Statement",
+        /// US Folio (8.5 × 13 in).
+        Folio = "Folio",
+    }
 }
 
-/// Page orientation override.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Orientation {
-    /// Portrait (taller than wide) — typically the default for most formats.
-    Portrait,
-    /// Landscape (wider than tall).
-    Landscape,
-    /// Catch-all for forward-compat (see spec §9.2).
-    #[serde(other)]
-    Unknown,
+open_string_enum! {
+    /// Page orientation override.
+    pub enum Orientation {
+        /// Portrait (taller than wide) — typically the default for most formats.
+        Portrait = "portrait",
+        /// Landscape (wider than tall).
+        Landscape = "landscape",
+    }
 }
 
 #[cfg(test)]
@@ -74,9 +67,20 @@ mod tests {
     }
 
     #[test]
-    fn page_format_unknown_variant_catches_server_additions() {
+    fn page_format_keeps_an_unknown_value_verbatim() {
         let v: PageFormat = serde_json::from_str(r#""FUTURE_FORMAT""#).unwrap();
-        assert_eq!(v, PageFormat::Unknown);
+        assert_eq!(v, PageFormat::Unknown("FUTURE_FORMAT".into()));
+        assert_eq!(serde_json::to_string(&v).unwrap(), r#""FUTURE_FORMAT""#);
+        assert_eq!(v.as_str(), "FUTURE_FORMAT");
+    }
+
+    #[test]
+    fn from_str_maps_known_values_to_their_variant() {
+        assert_eq!(PageFormat::from("Letter"), PageFormat::Letter);
+        assert_eq!(Orientation::from("landscape"), Orientation::Landscape);
+        // The wire values are case-sensitive, as the API's.
+        assert_eq!(PageFormat::from("a4"), PageFormat::Unknown("a4".into()));
+        assert_eq!(PageFormat::A4.to_string(), "A4");
     }
 
     #[test]
@@ -98,8 +102,9 @@ mod tests {
     }
 
     #[test]
-    fn orientation_unknown_catches_server_additions() {
+    fn orientation_keeps_an_unknown_value_verbatim() {
         let v: Orientation = serde_json::from_str(r#""diagonal""#).unwrap();
-        assert_eq!(v, Orientation::Unknown);
+        assert_eq!(v, Orientation::Unknown("diagonal".into()));
+        assert_eq!(serde_json::to_string(&v).unwrap(), r#""diagonal""#);
     }
 }

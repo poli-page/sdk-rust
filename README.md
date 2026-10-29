@@ -376,7 +376,7 @@ pub struct RenderInput {
 
 `project`, `template` and `data` are required by the API; the optional fields are left out of the request when `None`. `RenderInput::default()` sets `data` to JSON `null`, so always set it: `json!({})` is sent as `{}`.
 
-Wire fields that are `string | null` in the API map to `Option<String>` in Rust. `DocumentDescriptor::environment` is a plain `String`: any environment name the API returns. Forward-compatible enums (`PageFormat`, `Orientation`, `ThumbnailFormat`) carry a `#[serde(other)]` catch-all `Unknown` variant so a server-side addition is a silent no-op for old SDK versions.
+Wire fields that are `string | null` in the API map to `Option<String>` in Rust. `DocumentDescriptor::environment` is a plain `String`: any environment name the API returns. Forward-compatible enums (`PageFormat`, `Orientation`, `ThumbnailFormat`) carry an `Unknown(String)` variant that keeps a value the SDK does not know verbatim and serializes it back unchanged, so a server-side addition passes through old SDK versions. `From<&str>` builds one from its wire value, and `as_str()` gives it back.
 
 ## Concurrency & thread-safety
 

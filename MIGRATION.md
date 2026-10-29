@@ -51,8 +51,8 @@ now the specification's exact texts (`apiKey is required`,
 `Failed to download PDF: network error`, `HTTP <status>` for a non-JSON error
 body), and the `Display` of `InvalidOptions`, `Connection`, `Timeout`,
 `Aborted` and `Download` is that text, with no prefix. `Error::message()` gives
-the bare message of any error. The reqwest error behind a network, timeout or
-download failure is the error's `source()`.
+the bare message of any error. The reqwest error behind a network or download
+failure is the error's `source()`; `Error::Timeout` has no source.
 
 ### A `source` field on the API variants
 
@@ -61,6 +61,24 @@ download failure is the error's `source()`.
 error that broke the answer's body while it was read. Add `source: None` where
 you build one (in tests, for example), and `..` to a pattern that lists every
 field.
+
+### `PageFormat`, `Orientation` and `ThumbnailFormat`
+
+`Unknown` now carries the value: `Unknown(String)`. Match it as
+`PageFormat::Unknown(value)` (or `Unknown(_)`), and send it back as it came.
+The enums are no longer `Copy`: clone where you copied (`d.format.clone()`),
+or borrow. To build one from a string, use `PageFormat::from("A4")`, which
+gives the known variant; `as_str()` returns the wire value.
+
+```rust,ignore
+// 0.10.0
+if descriptor.format == PageFormat::Unknown { /* the value was lost */ }
+
+// next release
+if let PageFormat::Unknown(name) = &descriptor.format {
+    log::info!("page format {name} is newer than this SDK");
+}
+```
 
 ### `Retry-After`
 

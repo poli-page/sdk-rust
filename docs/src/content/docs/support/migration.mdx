@@ -13,6 +13,7 @@ The SDK follows the retry policy and the error messages of the Poli Page API con
 - **Predicates** read the status: `is_auth_error()` 401/403 (a download refused with 403 included), `is_rate_limit_error()` 429, `is_validation_error()` 400 only (a 422 `BadRequest` no longer counts).
 - **Messages**: the SDK-side messages are the specification's exact texts (`apiKey is required`, `Network request failed`, `Request timed out after <ms>ms`, `Request was aborted`, `Failed to download PDF: HTTP <status>`, `Failed to download PDF: network error`, `HTTP <status>`), and the `Display` of those variants. Match `code()`, not messages; `Error::message()` gives the bare message.
 - **`source` field**: the API-status variants carry `source: Option<Box<dyn Error + Send + Sync>>`; add `source: None` where you build one.
+- **Enums**: `PageFormat`, `Orientation` and `ThumbnailFormat` keep an unknown value as `Unknown(String)` and serialize it back unchanged; they are no longer `Copy` (clone or borrow).
 - **`Retry-After`**: only digits and HTTP-dates are read, clamped to 30 s.
 - **Injected client**: the SDK `timeout` bounds the whole attempt, body included; build an injected `reqwest::Client` with `.retry(reqwest::retry::never())`.
 
