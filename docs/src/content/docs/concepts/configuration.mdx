@@ -9,10 +9,10 @@ The `PoliPageBuilder` accepts every configurable option as a chainable setter. O
 
 - `api_key` (required) — your API key. It names its environment (`pp_{env}_…`); see [Authentication](../authentication/).
 - `base_url` — override the API endpoint. Defaults to `https://api.poli.page`.
-- `timeout` — per-attempt timeout (`std::time::Duration`). Defaults to 60 seconds.
+- `timeout` — per-attempt timeout (`std::time::Duration`), covering the connection, the request, the answer and its whole body, also with an injected client. Defaults to 60 seconds.
 - `max_retries` — maximum retry attempts on retryable errors. Defaults to `2` (three total attempts).
-- `retry_delay` — initial retry backoff. Defaults to 500 ms. Doubles each attempt.
-- `http_client` — inject a pre-built `reqwest::Client` for custom TLS, proxies, or shared connection pools.
+- `retry_delay` — initial retry backoff. Defaults to 500 ms. Doubles each attempt, with jitter; a `Retry-After` header replaces it.
+- `http_client` — inject a pre-built `reqwest::Client` for custom TLS, proxies, or shared connection pools. Build it with `.retry(reqwest::retry::never())` so that reqwest never resends a request behind the SDK's retries.
 - `on_retry` / `on_error` — observability hooks. Never block, never mutate requests.
 
 ## Example

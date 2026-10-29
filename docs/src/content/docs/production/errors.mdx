@@ -39,19 +39,21 @@ async fn main() {
 
 ## Convenience predicates
 
-For cross-language parity the enum exposes `is_auth_error()`, `is_rate_limit_error()`, `is_validation_error()`, `is_network_error()`, and `is_retryable()`. Use them when you don't need to bind the inner fields.
+For cross-language parity the enum exposes `is_auth_error()`, `is_rate_limit_error()`, `is_validation_error()`, `is_network_error()`, and `is_retryable()`. Use them when you don't need to bind the inner fields. They read the status, the same in every Poli Page SDK: `is_auth_error()` is status 401 or 403 (a `DOWNLOAD_FAILED` refused with 403 too), `is_rate_limit_error()` 429, `is_validation_error()` 400 (and `Error::BadRequest`), `is_network_error()` is `network_error` or `timeout`, and `is_retryable()` is what the SDK retries: a network error, a timeout, a 5xx or a 429, except `QUOTA_EXCEEDED`, `OVERAGE_CAP_EXCEEDED` and `STORAGE_ACCESS_DENIED`; never `aborted` or `DOWNLOAD_FAILED`.
+
+`err.message()` is the bare explanation. For SDK-side errors it is the exact text below, the same in every Poli Page SDK, and `Display` shows it as is; for API errors it is the body's `detail`, `title` or `message`, else `HTTP <status>`, and `Display` adds the kind and status (`not found (404): …`). The transport error behind a network, timeout or download failure is the error's `source()`.
 
 ## SDK-internal codes
 
 These originate inside the SDK before any HTTP call, or in response to a network-layer failure.
 
 <ErrorTable errors={[
-  { code: 'invalid_options', when: 'Builder validation failed (empty `api_key`, malformed `base_url`, etc.).', recovery: 'Fix the builder call. Returned synchronously from `build()`.' },
-  { code: 'network_error', when: 'TCP/TLS-layer failure reaching the API.', recovery: 'Automatically retried up to `max_retries` times.' },
-  { code: 'timeout', when: 'The request did not complete within the configured per-attempt `timeout`.', recovery: 'Automatically retried; raise `timeout` if it keeps tripping.' },
-  { code: 'aborted', when: 'The future was dropped or externally cancelled.', recovery: 'Not retryable. Surface to the caller.' },
-  { code: 'DOWNLOAD_FAILED', when: 'The presigned-URL second-hop fetch failed.', recovery: 'Re-mint the URL via `documents.get(id)` and retry; not retried by the SDK.' },
-  { code: 'INTERNAL_ERROR', when: 'Response body failed to parse, or another internal invariant tripped.', recovery: 'File a bug if reproducible.' },
+  { code: 'invalid_options', when: 'Builder validation failed: `apiKey is required` for a missing or empty `api_key`; also a malformed `base_url`.', recovery: 'Fix the builder call. Returned synchronously from `build()`.' },
+  { code: 'network_error', when: '`Network request failed`: DNS, connection or TLS failure, or the connection dropped before or while the answer was read.', recovery: 'Automatically retried up to `max_retries` times.' },
+  { code: 'timeout', when: '`Request timed out after <ms>ms`: an attempt did not complete, body included, within the per-attempt `timeout`.', recovery: 'Automatically retried; raise `timeout` if it keeps tripping.' },
+  { code: 'aborted', when: '`Request was aborted`: the future was dropped or externally cancelled.', recovery: 'Not retryable. Surface to the caller.' },
+  { code: 'DOWNLOAD_FAILED', when: 'The presigned-URL second-hop fetch failed: `Failed to download PDF: HTTP <status>` with the storage status, or `Failed to download PDF: network error` when the storage did not answer or the body broke off.', recovery: 'Re-mint the URL via `documents.get(id)` and retry; never retried by the SDK, whatever the status.' },
+  { code: 'INTERNAL_ERROR', when: 'A 2xx response body failed to parse, or another internal invariant tripped.', recovery: 'File a bug if reproducible.' },
 ]} />
 
 ## API codes
@@ -79,14 +81,15 @@ Returned by the Poli Page API and forwarded verbatim on `Error::BadRequest`, `Er
   { code: 'PROJECT_REQUIRED_FOR_DOCUMENT', when: 'Storing a document requires a `project` (400).', recovery: 'Set `project`.' },
   { code: 'ENVIRONMENT_MISMATCH', when: 'The request targets an environment other than the key`s (400).', recovery: 'Use a key of the environment you target.' },
   { code: 'TEMPLATE_ERROR', when: 'The template failed to render with the supplied data (400).', recovery: 'Check the data against the template, for example in the playground.' },
+  { code: 'TEMPLATE_UNSAFE', when: 'The template, a partial or an SVG asset holds an injection attempt (400); `detail` names it.', recovery: 'Remove the unsafe markup from the template and publish again. Not retried.' },
   { code: 'EMPTY_DOCUMENT', when: 'The render produced a document with no pages (400).', recovery: 'Check the template and data.' },
   { code: 'RENDER_BODY_TOO_LARGE', when: 'The render request body exceeds the size limit (413).', recovery: 'Send less data.' },
   { code: 'DOCUMENT_TOO_LARGE', when: 'The rendered document exceeds the size limit (413).', recovery: 'Split the document.' },
   { code: 'RATE_LIMIT_EXCEEDED', when: 'Too many render requests in the rate-limit window (429).', recovery: 'Automatically retried up to `max_retries` times, after `Retry-After` capped at 30 s; a longer wait can use up the retries.' },
-  { code: 'QUOTA_EXCEEDED', when: 'The organization exceeded its plan quota.', recovery: 'Automatically retried; upgrade the plan for sustained higher volume.' },
-  { code: 'OVERAGE_CAP_EXCEEDED', when: 'The organization exceeded its overage cap.', recovery: 'Raise the cap in the dashboard; retrying does not help until then.' },
-  { code: 'INTERNAL_ERROR', when: 'The API returned a generic 5xx.', recovery: 'Automatically retried; contact support if it persists.' },
-  { code: 'STORAGE_ACCESS_DENIED', when: 'The API could not read or write document storage (502).', recovery: 'Automatically retried; contact support if it persists.' },
+  { code: 'QUOTA_EXCEEDED', when: 'The organization exceeded its monthly quota (429, `Retry-After` up to the monthly reset).', recovery: 'Not retried: wait for the monthly reset or upgrade the plan.' },
+  { code: 'OVERAGE_CAP_EXCEEDED', when: 'The organization exceeded its overage cap (429).', recovery: 'Not retried: raise the cap in the dashboard; retrying does not help until then.' },
+  { code: 'INTERNAL_ERROR', when: 'The API returned a generic 5xx. Also the code of an error answer whose body is not JSON (a gateway page) or broke off while it was read, with its real status and the message `HTTP <status>`.', recovery: 'Retried when the status is a 5xx or 429; contact support if it persists.' },
+  { code: 'STORAGE_ACCESS_DENIED', when: 'The organization`s own storage bucket refuses access (502).', recovery: 'Not retried: restore the bucket role.' },
   { code: 'PUBLISH_IN_PROGRESS', when: 'A publish holds the project in this environment (503, with `Retry-After`).', recovery: 'Automatically retried up to `max_retries` times, after `Retry-After` capped at 30 s.' },
   { code: 'ORGANIZATION_MIGRATING', when: 'The organization is being migrated (503).', recovery: 'Automatically retried; try again later if it persists.' },
   { code: 'RENDER_TIMEOUT', when: 'The render did not finish in time (504).', recovery: 'Automatically retried; simplify the template if it persists.' },

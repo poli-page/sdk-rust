@@ -8,6 +8,109 @@ Breaking changes and their upgrade path are summarized in [MIGRATION.md](MIGRATI
 
 ## [Unreleased]
 
+Conformance with the Poli Page API contract v1.2.0
+([poli-page/api-contract](https://github.com/poli-page/api-contract)). See
+[MIGRATION.md](MIGRATION.md#from-0100-to-the-next-release-unreleased).
+
+### Changed
+
+- **BREAKING**: `QUOTA_EXCEEDED` and `OVERAGE_CAP_EXCEEDED` (429) and
+  `STORAGE_ACCESS_DENIED` (502) are no longer retried, even with a
+  `Retry-After` header, and `Error::is_retryable()` now returns `false` for
+  them (it returned `true` for any 429 or 5xx). They last until the monthly
+  reset or until the bucket access is restored, so the SDK used to wait up to
+  30 s per retry for nothing. `RATE_LIMIT_EXCEEDED` and every other 429 and
+  5xx are still retried. The retry loop and `is_retryable()` now share one rule.
+- **BREAKING**: `DOWNLOAD_FAILED` (`Error::Download`) is never retryable:
+  `is_retryable()` returns `false` whatever the storage status, 429 and 5xx
+  included (it returned `true` for a storage 5xx or 429). The SDK never
+  retried the download; the predicate now says so.
+- **BREAKING**: the predicates read the status, as the SDK specification
+  says: `is_auth_error()` is status 401 or 403, `is_rate_limit_error()` 429,
+  `is_validation_error()` 400 (or `Error::BadRequest`). A `DOWNLOAD_FAILED`
+  refused by the storage with 403 is now an auth error, and an `Error::Api`
+  with status 429 or 400 now answers `true` to the matching predicate.
+- **BREAKING**: SDK error messages are the exact texts of the SDK
+  specification, and the `Display` of the SDK-side variants is that text:
+  - `invalid_options` for a missing or empty API key: `apiKey is required`
+    (was `api_key is required`, displayed `invalid options: api_key is required`).
+  - `network_error`: `Network request failed` (was the reqwest error text,
+    displayed `network error: …`); the reqwest error is still the `source()`.
+  - `timeout`: `Request timed out after <ms>ms`, the attempt's timeout in
+    whole milliseconds (was `request timed out after 60s`); `to_payload()`
+    said `request timed out`.
+  - `aborted`: `Request was aborted` (was `request was aborted`).
+  - `DOWNLOAD_FAILED`: `Failed to download PDF: HTTP <status>` (was
+    `Failed to download PDF: <status> <reason>`, displayed
+    `download failed: …`), and `Failed to download PDF: network error` when
+    the storage does not answer or the body breaks off (was the reqwest error
+    text, now the `source()`). A body that breaks off has no status any more.
+  - A non-JSON error body: `HTTP <status>` (was
+    `HTTP <status>: response body was not valid JSON`); the code is still
+    `INTERNAL_ERROR` with the real status.
+- **BREAKING**: the API-status variants (`BadRequest`, `Auth`,
+  `PermissionDenied`, `NotFound`, `Gone`, `RateLimited`, `Api`) have a new
+  `source: Option<Box<dyn std::error::Error + Send + Sync>>` field: the error
+  that broke the answer's body while it was read. Code that builds these
+  variants adds `source: None`; a pattern without `..` adds the field.
+- **BREAKING**: `Retry-After` is read as integer seconds (digits only) or an
+  HTTP-date. Any other value (`-1`, `1.5`, `soon`) falls back to the backoff;
+  `-1` used to retry at once. An integer too large for `i64` clamps to the
+  30 s cap (it fell back to the backoff). `Retry-After-Ms` is ignored, as
+  before.
+- The per-attempt `timeout` now bounds the whole attempt: the connection, the
+  request, the answer and its whole body, with an injected `reqwest::Client`
+  too. The body was read outside the timeout, so a slow-dripping answer could
+  outlive it.
+- A 2xx answer cut off mid-body is `network_error`, and one that outlasts the
+  timeout is `timeout`: both are retried like any network failure (a retried
+  render can then store a second document, as with any retry after the
+  request reached the API). `on_response` fires once the body is read.
+- A non-2xx answer whose body breaks off or outlasts the timeout while it is
+  read is a malformed error body: `INTERNAL_ERROR`, `HTTP <status>`, the real
+  status and request id, the read error as `source()`, retried by its status
+  (a 503 is retried, a 400 is not). It was `network_error`, always retried.
+- An error body whose `code`, `error`, `detail`, `title` or `message` is not a
+  string ignores that field instead of being read as a non-JSON body; JSON
+  that is not an object gives `unknown_error` and `HTTP <status>`.
+- `to_payload()` uses `Error::message()` for its `message`; `status` and
+  `requestId` serialize as `null` when unknown, as before.
+- A retry wait is never shorter than its delay: if the timer wakes early, the
+  SDK sleeps again for the rest.
+- The minimum `reqwest` is 0.12.28.
+
+### Added
+
+- `Error::message()`: the bare explanation (spec §8.1 `message`), without the
+  prefix `Display` adds to API errors.
+- Known error code `TEMPLATE_UNSAFE` (400: the template, a partial or an SVG
+  asset holds an injection attempt; `detail` names it; not retried) in
+  `error_codes` and the docs.
+- `tests/contract.rs` runs every SDK case of the API contract against a local
+  mock server, one test per case id; CI pins the contract by commit
+  (`poli-page/api-contract` action) and Dependabot proposes each new version.
+  Run it locally with
+  `POLI_CONTRACT=<path to contract.json> cargo test --all-features --test contract`.
+
+### Fixed
+
+- A request is never resent behind the SDK's back. reqwest's default retry
+  policy resent a request the server refused over HTTP/2 (`REFUSED_STREAM`, a
+  graceful `GOAWAY`) on its own: `on_request` did not see that send,
+  `max_retries` did not count it, and as the API does not deduplicate on
+  `Idempotency-Key`, a render could be stored twice. The SDK's own client
+  turns that policy off, so the failure surfaces as `network_error` and goes
+  through the SDK's retry. HTTP/2 is not one of the SDK's reqwest features,
+  but Cargo turns it on when the application's own reqwest has it. A client
+  injected with `http_client(...)` keeps its own policy: build it with
+  `.retry(reqwest::retry::never())`. Over HTTP/1.1, hyper sends a request
+  again only when none of it reached the reused connection, which is not a
+  resend; a request lost after it was written comes back as `network_error`.
+- Docs: the retries page and the README no longer claim the API deduplicates
+  on `Idempotency-Key`. It does not: the key is stable across the retries of
+  one call, and a render retried after a late 5xx, a `timeout` or a
+  `network_error` can store a second document.
+
 ## [0.10.0] - 2026-10-27
 
 Implements the Poli Page environments contract. Breaking, with no

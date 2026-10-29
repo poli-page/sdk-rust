@@ -56,6 +56,7 @@ export function buildMetaSidecar(packageVersion: string): MetaSidecar {
       { code: 'PROJECT_REQUIRED_FOR_DOCUMENT' },
       { code: 'ENVIRONMENT_MISMATCH' },
       { code: 'TEMPLATE_ERROR' },
+      { code: 'TEMPLATE_UNSAFE' },
       { code: 'EMPTY_DOCUMENT' },
       { code: 'RENDER_BODY_TOO_LARGE' },
       { code: 'DOCUMENT_TOO_LARGE' },
