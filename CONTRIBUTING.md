@@ -44,6 +44,23 @@ cargo +1.93 build --locked --all-features
 `--locked` is critical — without it, a regenerated `Cargo.lock` can pull
 dep versions that have silently bumped past 1.93 and mask the regression.
 
+## API contract tests
+
+CI also runs `tests/contract.rs` against the
+[Poli Page API contract](https://github.com/poli-page/api-contract), pinned by
+commit in `.github/workflows/ci.yml`: every SDK case of `contract.json` runs
+as its own test, named by the case id, against a local mock server. Without
+`POLI_CONTRACT` the suite is skipped locally (and fails when `CI` is set). To
+run it, download that version's `contract.json` and run:
+
+```bash
+POLI_CONTRACT=<path to contract.json> cargo test --all-features --test contract
+```
+
+Case ids allowed to fail are listed, with the reason, in
+`tests/contract-skip.json`. `scripts/release.sh` downloads the pinned version
+unless `POLI_CONTRACT` is set.
+
 ## Pre-push hook
 
 Install once:

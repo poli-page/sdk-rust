@@ -24,37 +24,48 @@ use std::time::Duration;
 pub enum Error {
     // --- Reserved (SDK-internal) variants ---
     /// Constructor / builder validation failed (e.g., empty `api_key`).
-    #[error("invalid options: {message}")]
+    /// Displays as its `message`: `apiKey is required` for a missing or
+    /// empty key.
+    #[error("{message}")]
     InvalidOptions {
         /// Human-readable explanation of what was invalid.
         message: String,
     },
 
-    /// Underlying network failure — DNS, connection refused, TLS, decode, etc.
-    #[error("network error: {message}")]
+    /// Underlying network failure — DNS, connection refused, TLS, a connection
+    /// dropped before or while the answer was read, etc. Displays as its
+    /// `message`, `Network request failed`.
+    #[error("{message}")]
     Connection {
-        /// Human-readable summary of the failure.
+        /// Human-readable summary of the failure: `Network request failed`.
         message: String,
-        /// The underlying `reqwest` / `hyper` error, if available.
+        /// The underlying `reqwest` / `hyper` error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    /// Request deadline exceeded.
-    #[error("request timed out after {timeout:?}")]
+    /// An attempt exceeded the client's per-attempt `timeout`. Displays as
+    /// `Request timed out after <timeout in ms>ms`.
+    #[error("Request timed out after {}ms", .timeout.as_millis())]
     Timeout {
-        /// The deadline that was hit.
+        /// The bound that was hit: the client's per-attempt timeout, or, when
+        /// a timeout of an injected `reqwest::Client` fired first, the time
+        /// the attempt ran (whole milliseconds, at most the per-attempt
+        /// timeout).
         timeout: Duration,
     },
 
     /// The in-flight future was dropped or externally cancelled. Never retried.
-    #[error("request was aborted")]
+    #[error("Request was aborted")]
     Aborted,
 
-    /// Presigned-URL download (the PDF second-hop fetch) failed.
-    #[error("download failed: {message}")]
+    /// Presigned-URL download (the PDF second-hop fetch) failed. Never
+    /// retried. Displays as its `message`.
+    #[error("{message}")]
     Download {
-        /// Human-readable summary.
+        /// `Failed to download PDF: HTTP <status>` when the storage answered
+        /// with a non-2xx status, `Failed to download PDF: network error`
+        /// when it did not answer or the body failed while it was read.
         message: String,
         /// The S3 response status, if the request reached the storage layer.
         status: Option<u16>,
@@ -84,6 +95,10 @@ pub enum Error {
         message: String,
         /// `X-Request-Id` header from the response, if present.
         request_id: Option<String>,
+        /// The error that broke the answer's body while it was read, when the
+        /// code is `INTERNAL_ERROR` for that reason; `None` otherwise.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
     /// 401 — authentication required or invalid credentials.
@@ -97,6 +112,10 @@ pub enum Error {
         message: String,
         /// `X-Request-Id` header from the response, if present.
         request_id: Option<String>,
+        /// The error that broke the answer's body while it was read, when the
+        /// code is `INTERNAL_ERROR` for that reason; `None` otherwise.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
     /// 403 — the credentials are valid but lack permission for the action.
@@ -110,6 +129,10 @@ pub enum Error {
         message: String,
         /// `X-Request-Id` header from the response, if present.
         request_id: Option<String>,
+        /// The error that broke the answer's body while it was read, when the
+        /// code is `INTERNAL_ERROR` for that reason; `None` otherwise.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
     /// 404 — the requested resource doesn't exist.
@@ -123,6 +146,10 @@ pub enum Error {
         message: String,
         /// `X-Request-Id` header from the response, if present.
         request_id: Option<String>,
+        /// The error that broke the answer's body while it was read, when the
+        /// code is `INTERNAL_ERROR` for that reason; `None` otherwise.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
     /// 410 — the resource was deleted / no longer available.
@@ -136,6 +163,10 @@ pub enum Error {
         message: String,
         /// `X-Request-Id` header from the response, if present.
         request_id: Option<String>,
+        /// The error that broke the answer's body while it was read, when the
+        /// code is `INTERNAL_ERROR` for that reason; `None` otherwise.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
     /// 429 — caller exceeded the rate limit.
@@ -149,6 +180,10 @@ pub enum Error {
         message: String,
         /// `X-Request-Id` header from the response, if present.
         request_id: Option<String>,
+        /// The error that broke the answer's body while it was read, when the
+        /// code is `INTERNAL_ERROR` for that reason; `None` otherwise.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
     /// Catch-all for any 4xx or 5xx that doesn't match a more specific variant.
@@ -162,20 +197,36 @@ pub enum Error {
         message: String,
         /// `X-Request-Id` header from the response, if present.
         request_id: Option<String>,
+        /// The error that broke the answer's body while it was read, when the
+        /// code is `INTERNAL_ERROR` for that reason; `None` otherwise.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 }
 
 impl Clone for Error {
     /// Hand-rolled `Clone` so `RetryEvent` can carry an owned `Error`.
     ///
-    /// The `Box<dyn std::error::Error + Send + Sync>` source on `Connection`
-    /// and `Download` is NOT `Clone` (the trait object holds whatever the
+    /// The `Box<dyn std::error::Error + Send + Sync>` source on `Connection`,
+    /// `Download` and the API variants is NOT `Clone` (the trait object holds whatever the
     /// original error was — `reqwest::Error`, `io::Error`, etc.). Per spec
     /// §10.2 the cloned event drops the source — `message`, `code`, `status`,
     /// and `request_id` are preserved; the underlying chain isn't. Good
     /// enough for observability; users who need the source should inspect
     /// the original `Error` returned by the method call.
     fn clone(&self) -> Self {
+        // The API variants share their fields; the source is dropped.
+        macro_rules! api {
+            ($variant:ident, $status:ident, $code:ident, $message:ident, $request_id:ident) => {
+                Error::$variant {
+                    status: *$status,
+                    code: $code.clone(),
+                    message: $message.clone(),
+                    request_id: $request_id.clone(),
+                    source: None,
+                }
+            };
+        }
         match self {
             Error::InvalidOptions { message } => Error::InvalidOptions {
                 message: message.clone(),
@@ -202,84 +253,81 @@ impl Clone for Error {
                 code,
                 message,
                 request_id,
-            } => Error::BadRequest {
-                status: *status,
-                code: code.clone(),
-                message: message.clone(),
-                request_id: request_id.clone(),
-            },
+                ..
+            } => {
+                api!(BadRequest, status, code, message, request_id)
+            }
             Error::Auth {
                 status,
                 code,
                 message,
                 request_id,
-            } => Error::Auth {
-                status: *status,
-                code: code.clone(),
-                message: message.clone(),
-                request_id: request_id.clone(),
-            },
+                ..
+            } => {
+                api!(Auth, status, code, message, request_id)
+            }
             Error::PermissionDenied {
                 status,
                 code,
                 message,
                 request_id,
-            } => Error::PermissionDenied {
-                status: *status,
-                code: code.clone(),
-                message: message.clone(),
-                request_id: request_id.clone(),
-            },
+                ..
+            } => {
+                api!(PermissionDenied, status, code, message, request_id)
+            }
             Error::NotFound {
                 status,
                 code,
                 message,
                 request_id,
-            } => Error::NotFound {
-                status: *status,
-                code: code.clone(),
-                message: message.clone(),
-                request_id: request_id.clone(),
-            },
+                ..
+            } => {
+                api!(NotFound, status, code, message, request_id)
+            }
             Error::Gone {
                 status,
                 code,
                 message,
                 request_id,
-            } => Error::Gone {
-                status: *status,
-                code: code.clone(),
-                message: message.clone(),
-                request_id: request_id.clone(),
-            },
+                ..
+            } => {
+                api!(Gone, status, code, message, request_id)
+            }
             Error::RateLimited {
                 status,
                 code,
                 message,
                 request_id,
-            } => Error::RateLimited {
-                status: *status,
-                code: code.clone(),
-                message: message.clone(),
-                request_id: request_id.clone(),
-            },
+                ..
+            } => {
+                api!(RateLimited, status, code, message, request_id)
+            }
             Error::Api {
                 status,
                 code,
                 message,
                 request_id,
-            } => Error::Api {
-                status: *status,
-                code: code.clone(),
-                message: message.clone(),
-                request_id: request_id.clone(),
-            },
+                ..
+            } => {
+                api!(Api, status, code, message, request_id)
+            }
         }
     }
 }
 
+/// The codes a 429 or 5xx can carry that waiting cannot fix: the two quota
+/// codes last until the monthly reset, `STORAGE_ACCESS_DENIED` until the
+/// customer restores its bucket role. Never retried (spec §9.1).
+pub(crate) const NON_RETRYABLE_CODES: [&str; 3] = [
+    error_codes::QUOTA_EXCEEDED,
+    error_codes::OVERAGE_CAP_EXCEEDED,
+    error_codes::STORAGE_ACCESS_DENIED,
+];
+
 impl Error {
-    /// `true` for `Auth` (401) and `PermissionDenied` (403) — spec §7.1.
+    /// `true` when [`status`](Self::status) is 401 or 403 — spec §8.1. That
+    /// covers `Auth`, `PermissionDenied` and a `Download` refused by the
+    /// storage with 401 or 403.
     ///
     /// # Example
     ///
@@ -295,19 +343,22 @@ impl Error {
     /// ```
     #[must_use]
     pub fn is_auth_error(&self) -> bool {
-        matches!(self, Error::Auth { .. } | Error::PermissionDenied { .. })
+        matches!(self.status(), Some(401 | 403))
     }
 
-    /// `true` for `RateLimited` (429).
+    /// `true` when [`status`](Self::status) is 429 (`RateLimited`, or a
+    /// `Download` the storage answered with 429).
     #[must_use]
     pub fn is_rate_limit_error(&self) -> bool {
-        matches!(self, Error::RateLimited { .. })
+        self.status() == Some(429)
     }
 
-    /// `true` for `BadRequest` (400 / 422).
+    /// `true` when [`status`](Self::status) is 400 — spec §8.1, the same in
+    /// every Poli Page SDK. A 422 (an `Error::BadRequest` too) is not a
+    /// validation error.
     #[must_use]
     pub fn is_validation_error(&self) -> bool {
-        matches!(self, Error::BadRequest { .. })
+        self.status() == Some(400)
     }
 
     /// `true` for `Connection` and `Timeout` — both indicate the request
@@ -317,19 +368,45 @@ impl Error {
         matches!(self, Error::Connection { .. } | Error::Timeout { .. })
     }
 
-    /// `true` when the request can safely be retried: any 5xx, 429, or
-    /// network/timeout failure. Aborted requests are never retried.
+    /// `true` when the SDK retries this error (spec §9.1): a network failure,
+    /// a timeout, a 5xx or a 429, except `QUOTA_EXCEEDED`,
+    /// `OVERAGE_CAP_EXCEEDED` and `STORAGE_ACCESS_DENIED`. Never for
+    /// `Aborted`, and never for `Download` (`DOWNLOAD_FAILED`): the
+    /// presigned-URL download is not retried, whatever the storage status.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
-        if matches!(self, Error::Aborted) {
-            return false;
+        match self {
+            Error::Aborted | Error::Download { .. } | Error::InvalidOptions { .. } => false,
+            Error::Connection { .. } | Error::Timeout { .. } => true,
+            _ => match self.status() {
+                Some(s) if s >= 500 || s == 429 => !NON_RETRYABLE_CODES.contains(&self.code()),
+                _ => false,
+            },
         }
-        if self.is_network_error() {
-            return true;
-        }
-        match self.status() {
-            Some(s) => s >= 500 || s == 429,
-            None => false,
+    }
+
+    /// The human-readable explanation (spec §8.1 `message`), without the
+    /// variant prefix that `Display` adds to API errors. For the SDK-side
+    /// variants it is the exact text of the spec (§8.3): `apiKey is
+    /// required`, `Network request failed`, `Request timed out after <ms>ms`,
+    /// `Request was aborted`, `Failed to download PDF: HTTP <status>` or
+    /// `Failed to download PDF: network error`. For API errors it is the
+    /// body's `detail`, else `title`, else `message`, else `HTTP <status>`.
+    #[must_use]
+    pub fn message(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Error::InvalidOptions { message }
+            | Error::Connection { message, .. }
+            | Error::Download { message, .. }
+            | Error::Internal { message, .. }
+            | Error::BadRequest { message, .. }
+            | Error::Auth { message, .. }
+            | Error::PermissionDenied { message, .. }
+            | Error::NotFound { message, .. }
+            | Error::Gone { message, .. }
+            | Error::RateLimited { message, .. }
+            | Error::Api { message, .. } => std::borrow::Cow::Borrowed(message),
+            Error::Timeout { .. } | Error::Aborted => std::borrow::Cow::Owned(self.to_string()),
         }
     }
 
@@ -397,8 +474,9 @@ impl Error {
     /// API status for status-bearing variants — independent of the
     /// [`Error::status`] accessor, which keeps returning `None` for
     /// transport variants so existing callers are unaffected. The
-    /// `message` is the variant's own `message` field (the bare reason),
-    /// not the prefixed `Display` form.
+    /// `message` is [`Error::message`] (the bare reason), not the prefixed
+    /// `Display` form. `status` and `request_id` serialize as `null` when
+    /// unknown.
     #[must_use]
     pub fn to_payload(&self) -> ErrorPayload {
         let status = match self {
@@ -406,21 +484,7 @@ impl Error {
             Error::Timeout { .. } => Some(504),
             _ => self.status(),
         };
-        let message = match self {
-            Error::InvalidOptions { message }
-            | Error::Connection { message, .. }
-            | Error::Download { message, .. }
-            | Error::Internal { message, .. }
-            | Error::BadRequest { message, .. }
-            | Error::Auth { message, .. }
-            | Error::PermissionDenied { message, .. }
-            | Error::NotFound { message, .. }
-            | Error::Gone { message, .. }
-            | Error::RateLimited { message, .. }
-            | Error::Api { message, .. } => message.clone(),
-            Error::Timeout { .. } => "request timed out".to_string(),
-            Error::Aborted => "request was aborted".to_string(),
-        };
+        let message = self.message().into_owned();
         ErrorPayload {
             code: self.code().to_string(),
             message,
@@ -495,6 +559,9 @@ pub mod error_codes {
     pub const ENVIRONMENT_MISMATCH: &str = "ENVIRONMENT_MISMATCH";
     /// The template failed to render with the supplied data (400).
     pub const TEMPLATE_ERROR: &str = "TEMPLATE_ERROR";
+    /// The template, a partial or an SVG asset holds an injection attempt
+    /// (400); `detail` names it. Not retried.
+    pub const TEMPLATE_UNSAFE: &str = "TEMPLATE_UNSAFE";
     /// The render produced a document with no pages (400).
     pub const EMPTY_DOCUMENT: &str = "EMPTY_DOCUMENT";
     /// The render request body exceeds the size limit (413).
@@ -534,6 +601,7 @@ mod tests {
             code: "GENERIC".into(),
             message: "x".into(),
             request_id: Some("req_1".into()),
+            source: None,
         }
     }
 
@@ -543,6 +611,7 @@ mod tests {
             code: error_codes::INVALID_API_KEY.into(),
             message: "x".into(),
             request_id: None,
+            source: None,
         }
     }
 
@@ -552,15 +621,17 @@ mod tests {
             code: error_codes::FORBIDDEN.into(),
             message: "x".into(),
             request_id: None,
+            source: None,
         }
     }
 
     fn rate() -> Error {
         Error::RateLimited {
             status: 429,
-            code: error_codes::QUOTA_EXCEEDED.into(),
+            code: error_codes::RATE_LIMIT_EXCEEDED.into(),
             message: "x".into(),
             request_id: None,
+            source: None,
         }
     }
 
@@ -570,6 +641,7 @@ mod tests {
             code: error_codes::VALIDATION_ERROR.into(),
             message: "x".into(),
             request_id: None,
+            source: None,
         }
     }
 
@@ -597,16 +669,130 @@ mod tests {
     }
 
     #[test]
-    fn is_rate_limit_error_matches_only_rate_limited() {
+    fn is_rate_limit_error_is_status_429() {
         assert!(rate().is_rate_limit_error());
         assert!(!auth().is_rate_limit_error());
-        assert!(!api(429).is_rate_limit_error()); // Api variant, not RateLimited
+        // Spec §8.1: the helpers read the status, whatever the variant.
+        assert!(api(429).is_rate_limit_error());
+        assert!(download(Some(429)).is_rate_limit_error());
     }
 
     #[test]
-    fn is_validation_error_matches_only_bad_request() {
+    fn is_validation_error_is_status_400_only() {
         assert!(bad().is_validation_error());
-        assert!(!api(400).is_validation_error());
+        assert!(api(400).is_validation_error());
+        assert!(!api(404).is_validation_error());
+        // A 422 is a `BadRequest`, but not a validation error (spec §8.1).
+        let unprocessable = Error::BadRequest {
+            status: 422,
+            code: error_codes::VALIDATION_ERROR.into(),
+            message: "x".into(),
+            request_id: None,
+            source: None,
+        };
+        assert!(!unprocessable.is_validation_error());
+    }
+
+    #[test]
+    fn is_auth_error_covers_a_download_refused_with_401_or_403() {
+        assert!(download(Some(403)).is_auth_error());
+        assert!(download(Some(401)).is_auth_error());
+        assert!(!download(Some(404)).is_auth_error());
+        assert!(!download(None).is_auth_error());
+    }
+
+    fn download(status: Option<u16>) -> Error {
+        Error::Download {
+            message: "Failed to download PDF: HTTP 503".into(),
+            status,
+            source: None,
+        }
+    }
+
+    fn with_code(status: u16, code: &str) -> Error {
+        Error::RateLimited {
+            status,
+            code: code.into(),
+            message: "x".into(),
+            request_id: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn is_retryable_says_no_for_quota_overage_and_storage_access_denied() {
+        // Spec §9.1, R-NONRETRY: waiting cannot fix them.
+        assert!(!with_code(429, error_codes::QUOTA_EXCEEDED).is_retryable());
+        assert!(!with_code(429, error_codes::OVERAGE_CAP_EXCEEDED).is_retryable());
+        assert!(!with_code(502, error_codes::STORAGE_ACCESS_DENIED).is_retryable());
+        assert!(with_code(429, error_codes::RATE_LIMIT_EXCEEDED).is_retryable());
+        assert!(with_code(503, error_codes::PUBLISH_IN_PROGRESS).is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_is_false_for_download_failed_whatever_the_storage_status() {
+        // R-DOWNLOAD: the presigned-URL download is never retried, so its
+        // error is never retryable, even for a storage 503 or 429.
+        for status in [None, Some(403), Some(429), Some(500), Some(502), Some(503)] {
+            assert!(!download(status).is_retryable(), "status {status:?}");
+        }
+    }
+
+    #[test]
+    fn message_is_the_spec_text_for_sdk_side_errors() {
+        assert_eq!(
+            Error::Timeout {
+                timeout: Duration::from_millis(150)
+            }
+            .message(),
+            "Request timed out after 150ms"
+        );
+        assert_eq!(timeout().message(), "Request timed out after 60000ms");
+        assert_eq!(Error::Aborted.message(), "Request was aborted");
+        assert_eq!(
+            download(Some(503)).message(),
+            "Failed to download PDF: HTTP 503"
+        );
+        assert_eq!(api(500).message(), "x");
+    }
+
+    #[test]
+    fn sdk_side_errors_display_as_their_message() {
+        let invalid = Error::InvalidOptions {
+            message: "apiKey is required".into(),
+        };
+        assert_eq!(invalid.to_string(), "apiKey is required");
+        let conn = Error::Connection {
+            message: "Network request failed".into(),
+            source: Box::<dyn std::error::Error + Send + Sync>::from("inner"),
+        };
+        assert_eq!(conn.to_string(), "Network request failed");
+        assert_eq!(timeout().to_string(), "Request timed out after 60000ms");
+        assert_eq!(
+            download(None).to_string(),
+            "Failed to download PDF: HTTP 503"
+        );
+    }
+
+    #[test]
+    fn api_error_keeps_the_body_read_error_as_its_source() {
+        use std::error::Error as _;
+        let err = Error::Api {
+            status: 503,
+            code: error_codes::INTERNAL_ERROR.into(),
+            message: "HTTP 503".into(),
+            request_id: Some("req_1".into()),
+            source: Some(Box::<dyn std::error::Error + Send + Sync>::from("cut off")),
+        };
+        assert_eq!(
+            err.source().map(ToString::to_string).as_deref(),
+            Some("cut off")
+        );
+        assert!(api(503).source().is_none());
+        // A clone drops the source, keeping the rest.
+        let cloned = err.clone();
+        assert!(cloned.source().is_none());
+        assert_eq!(cloned.request_id(), Some("req_1"));
     }
 
     #[test]
@@ -720,7 +906,7 @@ mod tests {
     fn code_returns_wire_code_for_api_variants() {
         assert_eq!(auth().code(), error_codes::INVALID_API_KEY);
         assert_eq!(perm().code(), error_codes::FORBIDDEN);
-        assert_eq!(rate().code(), error_codes::QUOTA_EXCEEDED);
+        assert_eq!(rate().code(), error_codes::RATE_LIMIT_EXCEEDED);
         assert_eq!(bad().code(), error_codes::VALIDATION_ERROR);
         assert_eq!(api(503).code(), "GENERIC");
     }
@@ -742,8 +928,8 @@ mod tests {
     }
 
     #[test]
-    fn display_for_aborted_is_terse() {
-        assert_eq!(Error::Aborted.to_string(), "request was aborted");
+    fn display_for_aborted_is_the_spec_message() {
+        assert_eq!(Error::Aborted.to_string(), "Request was aborted");
     }
 
     // --- to_payload ---
@@ -780,8 +966,8 @@ mod tests {
 
     // --- error_codes ---
 
-    /// The 31 API codes of the environments contract, and nothing else.
-    const CONTRACT_API_CODES: [&str; 31] = [
+    /// The 32 API codes of the environments contract, and nothing else.
+    const CONTRACT_API_CODES: [&str; 32] = [
         "DOCUMENT_GONE",
         "DOCUMENT_NOT_FOUND",
         "DOCUMENT_TOO_LARGE",
@@ -811,6 +997,7 @@ mod tests {
         "STORAGE_ACCESS_DENIED",
         "TEMPLATE_ERROR",
         "TEMPLATE_NOT_FOUND",
+        "TEMPLATE_UNSAFE",
         "THUMBNAILS_NOT_AVAILABLE",
         "VALIDATION_ERROR",
     ];
@@ -887,6 +1074,25 @@ mod tests {
         assert_eq!(error_codes::RENDER_BODY_TOO_LARGE, "RENDER_BODY_TOO_LARGE");
         assert_eq!(error_codes::DOCUMENT_TOO_LARGE, "DOCUMENT_TOO_LARGE");
         assert_eq!(error_codes::RENDER_TIMEOUT, "RENDER_TIMEOUT");
+    }
+
+    #[test]
+    fn to_payload_writes_null_status_and_request_id_when_unknown() {
+        // Spec §8.1: both keys are present, as null.
+        let raw = serde_json::to_value(Error::Aborted.to_payload()).expect("serialise payload");
+        assert_eq!(
+            raw,
+            serde_json::json!({
+                "code": "aborted",
+                "message": "Request was aborted",
+                "status": null,
+                "requestId": null,
+            })
+        );
+        let raw = serde_json::to_value(timeout().to_payload()).expect("serialise payload");
+        assert_eq!(raw["message"], "Request timed out after 60000ms");
+        assert_eq!(raw["status"], 504);
+        assert!(raw["requestId"].is_null());
     }
 
     #[test]

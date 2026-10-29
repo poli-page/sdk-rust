@@ -50,8 +50,15 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Only the `integration` target runs here, but any test command gets
+      # the pinned API contract so tests/contract.rs never skips.
+      - name: API contract
+        id: contract
+        uses: poli-page/api-contract@652ca4cc459314181031de1a0a5b8f647533acf5 # v1.2.0
       - name: cargo test (integration, --ignored)
         env:
+          CI: "true"
+          POLI_CONTRACT: ${{ steps.contract.outputs.path }}
           POLI_PAGE_API_KEY: ${{ secrets.POLI_PAGE_API_KEY }}
           POLI_PAGE_TEST_BASE_URL: ${{ secrets.POLI_PAGE_TEST_BASE_URL }}
         shell: bash

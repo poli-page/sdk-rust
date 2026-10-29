@@ -78,8 +78,19 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo doc --no-deps --all-features --locked
+      # The release runs the API contract tests (tests/contract.rs) against
+      # the version ci.yml pins.
+      - name: API contract
+        id: contract
+        uses: poli-page/api-contract@652ca4cc459314181031de1a0a5b8f647533acf5 # v1.2.0
       - run: cargo test --all-features --locked
+        env:
+          CI: "true"
+          POLI_CONTRACT: ${{ steps.contract.outputs.path }}
       - run: cargo test --no-default-features --features blocking --locked
+        env:
+          CI: "true"
+          POLI_CONTRACT: ${{ steps.contract.outputs.path }}
       - name: cargo deny
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:

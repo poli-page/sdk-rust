@@ -208,6 +208,37 @@ mod tests {
     }
 
     #[test]
+    fn unknown_format_and_orientation_survive_deserialize_and_serialize() {
+        // Spec §10: a value the API adds is kept verbatim, never dropped.
+        let mut wire = sample_wire();
+        wire["format"] = json!("Crown-Quarto");
+        wire["orientation"] = json!("diagonal");
+        let d: DocumentDescriptor = serde_json::from_value(wire).unwrap();
+        assert_eq!(d.format, PageFormat::Unknown("Crown-Quarto".into()));
+        assert_eq!(d.orientation, Some(Orientation::Unknown("diagonal".into())));
+        assert_eq!(
+            serde_json::to_value(&d.format).unwrap(),
+            json!("Crown-Quarto")
+        );
+        assert_eq!(
+            serde_json::to_value(&d.orientation).unwrap(),
+            json!("diagonal")
+        );
+        // And it goes back to the API unchanged in a render input.
+        let input = crate::RenderInput {
+            project: "p".into(),
+            template: "t".into(),
+            data: json!({}),
+            format: Some(d.format.clone()),
+            orientation: d.orientation.clone(),
+            ..Default::default()
+        };
+        let sent = serde_json::to_value(&input).unwrap();
+        assert_eq!(sent["format"], "Crown-Quarto");
+        assert_eq!(sent["orientation"], "diagonal");
+    }
+
+    #[test]
     fn metadata_defaults_to_empty_when_field_omitted() {
         // Defense-in-depth: the server always echoes `{}`, but our parser
         // tolerates a missing `metadata` key per spec §3.4.

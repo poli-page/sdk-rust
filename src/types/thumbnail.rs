@@ -4,20 +4,17 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Output image format for thumbnails. The API defaults to JPEG when the
-/// caller omits the field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThumbnailFormat {
-    /// JPEG — lossy. Smaller files; `quality` (1-100) tunes the trade-off.
-    Jpeg,
-    /// WebP — compact, supported by every current browser.
-    Webp,
-    /// PNG — lossless. Larger files, suitable for crisp UI thumbnails.
-    Png,
-    /// Catch-all for forward-compat (spec §9.2).
-    #[serde(other)]
-    Unknown,
+open_string_enum! {
+    /// Output image format for thumbnails. The API defaults to JPEG when the
+    /// caller omits the field.
+    pub enum ThumbnailFormat {
+        /// JPEG — lossy. Smaller files; `quality` (1-100) tunes the trade-off.
+        Jpeg = "jpeg",
+        /// WebP — compact, supported by every current browser.
+        Webp = "webp",
+        /// PNG — lossless. Larger files, suitable for crisp UI thumbnails.
+        Png = "png",
+    }
 }
 
 /// Options accepted by [`crate::Documents::thumbnails`]. Every option is
@@ -128,9 +125,16 @@ mod tests {
     }
 
     #[test]
-    fn format_deserializes_unknown_as_catch_all() {
+    fn format_keeps_an_unknown_value_verbatim() {
         let v: ThumbnailFormat = serde_json::from_str(r#""avif""#).unwrap();
-        assert_eq!(v, ThumbnailFormat::Unknown);
+        assert_eq!(v, ThumbnailFormat::Unknown("avif".into()));
+        // Sent back unchanged: a format the API added after this release.
+        let wire = serde_json::to_value(ThumbnailOptions {
+            format: Some(v),
+            ..ThumbnailOptions::new()
+        })
+        .unwrap();
+        assert_eq!(wire, json!({ "format": "avif" }));
     }
 
     #[test]

@@ -38,9 +38,29 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: cargo doc
         run: cargo doc --no-deps --all-features
+      # Copies the pinned contract.json (the Poli Page API contract) to
+      # $RUNNER_TEMP; tests/contract.rs runs its SDK cases. Pinned by commit;
+      # Dependabot proposes each new version.
+      - name: API contract
+        id: contract
+        uses: poli-page/api-contract@652ca4cc459314181031de1a0a5b8f647533acf5 # v1.2.0
+      - name: API contract file present
+        shell: bash
+        env:
+          POLI_CONTRACT: ${{ steps.contract.outputs.path }}
+        run: |
+          test -s "$POLI_CONTRACT" || { echo "::error::API contract file missing: '$POLI_CONTRACT'"; exit 1; }
+      # With CI set, tests/contract.rs fails (never skips) without
+      # POLI_CONTRACT; CI is set here too rather than left to the runner.
       - name: cargo test (all features)
+        env:
+          CI: "true"
+          POLI_CONTRACT: ${{ steps.contract.outputs.path }}
         run: cargo test --all-features --locked
       - name: cargo test (blocking only)
+        env:
+          CI: "true"
+          POLI_CONTRACT: ${{ steps.contract.outputs.path }}
         run: cargo test --no-default-features --features blocking --locked
 
   msrv:
@@ -75,7 +95,14 @@ jobs:
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
         with:
           tool: cargo-llvm-cov
+      # The coverage run executes the tests too, tests/contract.rs included.
+      - name: API contract
+        id: contract
+        uses: poli-page/api-contract@652ca4cc459314181031de1a0a5b8f647533acf5 # v1.2.0
       - name: generate lcov coverage
+        env:
+          CI: "true"
+          POLI_CONTRACT: ${{ steps.contract.outputs.path }}
         run: cargo llvm-cov --all-features --workspace --locked --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

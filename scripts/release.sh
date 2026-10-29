@@ -83,10 +83,26 @@ ok "cargo clippy --all-targets --all-features -- -D warnings"
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
 ok "cargo doc --no-deps --all-features (RUSTDOCFLAGS=-D warnings)"
 
-cargo test --all-features --locked
-ok "cargo test --all-features"
+# tests/contract.rs runs the API contract cases. Use the contract version CI
+# pins, unless POLI_CONTRACT already names a contract.json.
+contract_sha=$(sed -n 's|.*uses: poli-page/api-contract@\([0-9a-f]\{40\}\).*|\1|p' .github/workflows/ci.yml | head -n 1)
+[[ -n "$contract_sha" ]] || die "No poli-page/api-contract pin found in .github/workflows/ci.yml"
+if [[ -z "${POLI_CONTRACT:-}" ]]; then
+    POLI_CONTRACT="$(mktemp -d)/contract.json"
+    curl -fsSL "https://raw.githubusercontent.com/poli-page/api-contract/$contract_sha/contract.json" -o "$POLI_CONTRACT" \
+        || die "Could not download the API contract $contract_sha; set POLI_CONTRACT to its contract.json"
+    ok "API contract: the version CI pins ($contract_sha), downloaded to $POLI_CONTRACT"
+else
+    warn "API contract: POLI_CONTRACT=$POLI_CONTRACT overrides the version CI pins ($contract_sha)"
+fi
+[[ -s "$POLI_CONTRACT" ]] || die "API contract file missing or empty: $POLI_CONTRACT"
+export POLI_CONTRACT
 
-cargo test --no-default-features --features blocking --locked
+# CI=true: tests/contract.rs fails instead of skipping without POLI_CONTRACT.
+CI=true cargo test --all-features --locked
+ok "cargo test --all-features (unit and API contract tests)"
+
+CI=true cargo test --no-default-features --features blocking --locked
 ok "cargo test --no-default-features --features blocking"
 
 if command -v cargo-deny >/dev/null 2>&1; then

@@ -1,7 +1,7 @@
 //! Compile-time constants shared by the transport core.
 //!
 //! Tests import from here — string literals never get re-typed at call sites.
-//! Values mirror the Node reference SDK (`/Users/mickael/Projects/sdk-node/src/index.ts`).
+//! Values mirror the Node reference SDK (`src/index.ts` in `poli-page/sdk-node`).
 
 // Phase 1 ships the constants; their consumers (client, render, documents)
 // land in Phase 2+. Suppress the per-item dead-code lint module-wide rather

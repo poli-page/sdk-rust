@@ -5,6 +5,18 @@ description: Upgrade guides for moving between breaking versions of the Rust SDK
 
 This page tracks breaking changes between versions of the `poli-page` crate. Before `1.0.0`, a breaking change bumps the minor version. For the full per-release diff, see the [changelog](../changelog/), and for every before/after table, [`MIGRATION.md` in the repo](https://github.com/poli-page/sdk-rust/blob/main/MIGRATION.md).
 
+## From 0.10.0 to the next release
+
+The SDK follows the retry policy and the error messages of the Poli Page API contract.
+
+- **Retries**: `QUOTA_EXCEEDED`, `OVERAGE_CAP_EXCEEDED` (429) and `STORAGE_ACCESS_DENIED` (502) are no longer retried, and `is_retryable()` is `false` for them and for `DOWNLOAD_FAILED`, whatever the storage status. Handle the quota codes by `code()`.
+- **Predicates** read the status: `is_auth_error()` 401/403 (a download refused with 403 included), `is_rate_limit_error()` 429, `is_validation_error()` 400 only (a 422 `BadRequest` no longer counts).
+- **Messages**: the SDK-side messages are the specification's exact texts (`apiKey is required`, `Network request failed`, `Request timed out after <ms>ms`, `Request was aborted`, `Failed to download PDF: HTTP <status>`, `Failed to download PDF: network error`, `HTTP <status>`), and the `Display` of those variants. Match `code()`, not messages; `Error::message()` gives the bare message.
+- **`source` field**: the API-status variants carry `source: Option<Box<dyn Error + Send + Sync>>`; add `source: None` where you build one.
+- **Enums**: `PageFormat`, `Orientation` and `ThumbnailFormat` keep an unknown value as `Unknown(String)` and serialize it back unchanged; they are no longer `Copy` (clone or borrow).
+- **`Retry-After`**: only digits and HTTP-dates are read, clamped to 30 s.
+- **Injected client**: the SDK `timeout` bounds the whole attempt, body included; build an injected `reqwest::Client` with `.retry(reqwest::retry::never())`.
+
 ## From 0.9.x to 0.10.0
 
 The API moved from template versions to environments. An API key belongs to one environment, and a render uses the project's copy published in that environment.

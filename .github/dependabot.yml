@@ -16,7 +16,19 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      # Daily: a new API contract version (poli-page/api-contract) arrives as a PR at once.
+      interval: daily
+    # Hold other action bumps 3 days after their release; a new contract
+    # version arrives at once.
+    cooldown:
+      default-days: 3
+      exclude:
+        - "poli-page/api-contract"
     groups:
+      # The API contract gets PRs of its own: a contract bump shows what the
+      # API change breaks, never mixed with other action bumps.
+      api-contract:
+        patterns: ["poli-page/api-contract"]
       actions:
         patterns: ["*"]
+        exclude-patterns: ["poli-page/api-contract"]

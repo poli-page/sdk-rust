@@ -267,7 +267,7 @@ let client = PoliPage::builder()
 | `base_url` | `String` | `https://api.poli.page` | API base URL |
 | `max_retries` | `u32` | `2` | Max retry attempts on retryable errors |
 | `retry_delay` | `Duration` | 500 ms | Base delay before the first retry |
-| `timeout` | `Duration` | 60 s | Per-attempt timeout |
+| `timeout` | `Duration` | 60 s | Per-attempt timeout, body included |
 | `on_retry` | `Fn(&RetryEvent) + Send + Sync` | — | Called before each retry sleep |
 | `on_error` | `Fn(&Error) + Send + Sync` | — | Called once per terminal failure |
 
@@ -290,7 +290,7 @@ match client.render.pdf(input).await {
 # Ok(()) }
 ```
 
-Every API-error variant exposes `status()` (HTTP status), `code()` (the wire error code) and `request_id()` (the `X-Request-Id` header — invaluable for support). `to_payload()` returns all four, with the bare message, as one `ErrorPayload`.
+Every API-error variant exposes `status()` (HTTP status), `code()` (the wire error code) and `request_id()` (the `X-Request-Id` header — invaluable for support). `message()` is the bare explanation: for SDK-side errors the exact text every Poli Page SDK uses (`apiKey is required`, `Network request failed`, `Request timed out after <ms>ms`, `Failed to download PDF: HTTP <status>`, …), which is also their `Display`. `to_payload()` returns all four, with the bare message, as one `ErrorPayload` (`status` and `requestId` are `null` when unknown). The predicates read the status: `is_auth_error()` is 401 or 403, `is_rate_limit_error()` 429, `is_validation_error()` 400.
 
 For not-found, lifecycle and billing failures, match the wire code directly:
 
@@ -348,11 +348,13 @@ Hooks are wrapped in `catch_unwind` — a panicking callback never breaks the re
 
 ## Retries & idempotency
 
-The SDK retries on **5xx** (including `503 PUBLISH_IN_PROGRESS` while a publish holds the project), **429**, **network errors**, and **timeouts**. Backoff is exponential (`retry_delay × 2^attempt`) with jitter in `[0.5, 1.5)`, capped by `Retry-After` when the server provides it (max 30 s). 4xx errors other than 429 are never retried.
+The SDK retries on **5xx** (including `503 PUBLISH_IN_PROGRESS` while a publish holds the project), **429**, **network errors**, and **timeouts**, except `QUOTA_EXCEEDED`, `OVERAGE_CAP_EXCEEDED` (429) and `STORAGE_ACCESS_DENIED` (502), which waiting cannot fix: those are returned at once. Before retry `n` (1-based) the SDK waits `retry_delay × 2^(n−1) × j`, with `j` a random factor in `[0.5, 1.5)`; a `Retry-After` header (integer seconds or HTTP-date, clamped to 30 s) replaces it when the server sends one. `Retry-After-Ms` is ignored. 4xx errors other than 429 are never retried.
 
-Every POST sends an auto-generated `Idempotency-Key` (UUID v4) — safe to retry across network blips without producing duplicate documents. Override per call via `RenderInput::idempotency_key`.
+Every request the server receives is one of the SDK's attempts: the SDK's own `reqwest` client never resends a request by itself (reqwest's retry policy, which resends refused HTTP/2 requests, is off). If you inject a client with `http_client(...)`, build it with `.retry(reqwest::retry::never())` too.
 
-The second-hop presigned-URL fetch (for `render.pdf` / `render.pdf_stream` / `DocumentDescriptor::download_pdf`) is **single-attempt** and **unauthenticated** — it carries its own signature and doesn't participate in the SDK's retry policy.
+Every POST sends an auto-generated `Idempotency-Key` (UUID v4), the same on every retry of that call. The API does not deduplicate on it, so a render retried after a late 5xx, a `timeout` or a `network_error` can store a second document. Override the key per call via `RenderInput::idempotency_key`.
+
+The second-hop presigned-URL fetch (for `render.pdf` / `render.pdf_stream` / `DocumentDescriptor::download_pdf`) is **single-attempt** and **unauthenticated** — it carries its own signature and doesn't participate in the SDK's retry policy: its `DOWNLOAD_FAILED` is never retryable, whatever the storage status.
 
 ## Type system
 
@@ -374,7 +376,7 @@ pub struct RenderInput {
 
 `project`, `template` and `data` are required by the API; the optional fields are left out of the request when `None`. `RenderInput::default()` sets `data` to JSON `null`, so always set it: `json!({})` is sent as `{}`.
 
-Wire fields that are `string | null` in the API map to `Option<String>` in Rust. `DocumentDescriptor::environment` is a plain `String`: any environment name the API returns. Forward-compatible enums (`PageFormat`, `Orientation`, `ThumbnailFormat`) carry a `#[serde(other)]` catch-all `Unknown` variant so a server-side addition is a silent no-op for old SDK versions.
+Wire fields that are `string | null` in the API map to `Option<String>` in Rust. `DocumentDescriptor::environment` is a plain `String`: any environment name the API returns. Forward-compatible enums (`PageFormat`, `Orientation`, `ThumbnailFormat`) carry an `Unknown(String)` variant that keeps a value the SDK does not know verbatim and serializes it back unchanged, so a server-side addition passes through old SDK versions. `From<&str>` builds one from its wire value, and `as_str()` gives it back.
 
 ## Concurrency & thread-safety
 

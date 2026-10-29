@@ -4,6 +4,102 @@ This document records breaking changes between versions of `poli-page`
 and the upgrade path for downstream code. Before `1.0.0`, a breaking
 change bumps the minor version (`0.(x+1).0`), per Cargo's 0.x semver rules.
 
+## From 0.10.0 to the next release (unreleased)
+
+The SDK now follows the retry policy and the error messages of the Poli Page
+API contract.
+
+### Three codes are no longer retried
+
+`QUOTA_EXCEEDED` and `OVERAGE_CAP_EXCEEDED` (429) and `STORAGE_ACCESS_DENIED`
+(502) are returned at once, and `is_retryable()` returns `false` for them. A
+queue that requeues on `is_retryable()` now drops these errors: handle them by
+code instead, for example hold quota errors until the monthly reset and alert
+on `STORAGE_ACCESS_DENIED` until the bucket role is restored.
+`is_rate_limit_error()` is still `true` for the two 429s.
+
+```rust,ignore
+// 0.10.0
+if err.is_retryable() { // was true for QUOTA_EXCEEDED
+    requeue(job);
+}
+
+// next release
+match err.code() {
+    error_codes::QUOTA_EXCEEDED | error_codes::OVERAGE_CAP_EXCEEDED => hold_until_monthly_reset(job),
+    _ if err.is_retryable() => requeue(job),
+    _ => fail(job, err),
+}
+```
+
+`DOWNLOAD_FAILED` is never retryable either, whatever the storage status: re-mint
+the URL with `documents.get(id)` and download again.
+
+### Predicates
+
+`is_auth_error()`, `is_rate_limit_error()` and `is_validation_error()` read the
+status (401/403, 429, 400). A `DOWNLOAD_FAILED` refused with 403 is now an auth
+error: the presigned URL expired or was refused. A 422 (`Error::BadRequest`) is
+no longer a validation error: match `Error::BadRequest { .. }` if you need it.
+
+### Messages and `Display`
+
+If you match error messages, match `code()` instead: the SDK-side messages are
+now the specification's exact texts (`apiKey is required`,
+`Network request failed`, `Request timed out after <ms>ms`,
+`Request was aborted`, `Failed to download PDF: HTTP <status>`,
+`Failed to download PDF: network error`, `HTTP <status>` for a non-JSON error
+body), and the `Display` of `InvalidOptions`, `Connection`, `Timeout`,
+`Aborted` and `Download` is that text, with no prefix. `Error::message()` gives
+the bare message of any error. The reqwest error behind a network or download
+failure is the error's `source()`; `Error::Timeout` has no source.
+
+### A `source` field on the API variants
+
+`BadRequest`, `Auth`, `PermissionDenied`, `NotFound`, `Gone`, `RateLimited` and
+`Api` carry `source: Option<Box<dyn std::error::Error + Send + Sync>>`, the
+error that broke the answer's body while it was read. Add `source: None` where
+you build one (in tests, for example), and `..` to a pattern that lists every
+field.
+
+### `PageFormat`, `Orientation` and `ThumbnailFormat`
+
+`Unknown` now carries the value: `Unknown(String)`. Match it as
+`PageFormat::Unknown(value)` (or `Unknown(_)`), and send it back as it came.
+The enums are no longer `Copy`: clone where you copied (`d.format.clone()`),
+or borrow. To build one from a string, use `PageFormat::from("A4")`, which
+gives the known variant; `as_str()` returns the wire value.
+
+```rust,ignore
+// 0.10.0
+if descriptor.format == PageFormat::Unknown { /* the value was lost */ }
+
+// next release
+if let PageFormat::Unknown(name) = &descriptor.format {
+    log::info!("page format {name} is newer than this SDK");
+}
+```
+
+### `Retry-After`
+
+Only digits (seconds) and HTTP-dates are read, clamped to 30 s; any other value
+falls back to the backoff (`-1` used to retry at once).
+
+### Injected `reqwest::Client`
+
+The SDK's `timeout` now bounds the whole attempt, body included, whatever
+client you inject: drop any read timeout you set only to bound the body. Build
+an injected client with `.retry(reqwest::retry::never())`, as the SDK does for
+its own: reqwest's default policy resends some refused HTTP/2 requests, which
+the SDK cannot count and the API does not deduplicate.
+
+### Bodies that break off
+
+A 2xx answer cut off while its body is read is now `network_error` (or
+`timeout`), retried by the SDK, instead of a non-retried error. A non-2xx answer
+whose body breaks off is `INTERNAL_ERROR` with its status and `HTTP <status>`,
+retried by that status, instead of `network_error`.
+
 ## From 0.9.x to 0.10.0
 
 The API moved from template versions to environments. An API key belongs
