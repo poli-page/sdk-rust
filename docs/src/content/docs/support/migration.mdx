@@ -10,7 +10,7 @@ This page tracks breaking changes between versions of the `poli-page` crate. Bef
 The SDK follows the retry policy and the error messages of the Poli Page API contract.
 
 - **Retries**: `QUOTA_EXCEEDED`, `OVERAGE_CAP_EXCEEDED` (429) and `STORAGE_ACCESS_DENIED` (502) are no longer retried, and `is_retryable()` is `false` for them and for `DOWNLOAD_FAILED`, whatever the storage status. Handle the quota codes by `code()`.
-- **Predicates** read the status: `is_auth_error()` 401/403 (a download refused with 403 included), `is_rate_limit_error()` 429, `is_validation_error()` 400.
+- **Predicates** read the status: `is_auth_error()` 401/403 (a download refused with 403 included), `is_rate_limit_error()` 429, `is_validation_error()` 400 only (a 422 `BadRequest` no longer counts).
 - **Messages**: the SDK-side messages are the specification's exact texts (`apiKey is required`, `Network request failed`, `Request timed out after <ms>ms`, `Request was aborted`, `Failed to download PDF: HTTP <status>`, `Failed to download PDF: network error`, `HTTP <status>`), and the `Display` of those variants. Match `code()`, not messages; `Error::message()` gives the bare message.
 - **`source` field**: the API-status variants carry `source: Option<Box<dyn Error + Send + Sync>>`; add `source: None` where you build one.
 - **`Retry-After`**: only digits and HTTP-dates are read, clamped to 30 s.

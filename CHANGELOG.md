@@ -27,9 +27,11 @@ Conformance with the Poli Page API contract v1.2.0
   retried the download; the predicate now says so.
 - **BREAKING**: the predicates read the status, as the SDK specification
   says: `is_auth_error()` is status 401 or 403, `is_rate_limit_error()` 429,
-  `is_validation_error()` 400 (or `Error::BadRequest`). A `DOWNLOAD_FAILED`
-  refused by the storage with 403 is now an auth error, and an `Error::Api`
-  with status 429 or 400 now answers `true` to the matching predicate.
+  `is_validation_error()` 400 only. A `DOWNLOAD_FAILED` refused by the storage
+  with 403 is now an auth error, and an `Error::Api` with status 429 or 400
+  now answers `true` to the matching predicate. An `Error::BadRequest` with
+  status 422 is no longer a validation error (`is_validation_error()` was
+  `true` for any `BadRequest`).
 - **BREAKING**: SDK error messages are the exact texts of the SDK
   specification, and the `Display` of the SDK-side variants is that text:
   - `invalid_options` for a missing or empty API key: `apiKey is required`

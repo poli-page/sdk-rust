@@ -350,11 +350,12 @@ impl Error {
         self.status() == Some(429)
     }
 
-    /// `true` for `BadRequest` (400 / 422) and any other error whose
-    /// [`status`](Self::status) is 400.
+    /// `true` when [`status`](Self::status) is 400 — spec §8.1, the same in
+    /// every Poli Page SDK. A 422 (an `Error::BadRequest` too) is not a
+    /// validation error.
     #[must_use]
     pub fn is_validation_error(&self) -> bool {
-        matches!(self, Error::BadRequest { .. }) || self.status() == Some(400)
+        self.status() == Some(400)
     }
 
     /// `true` for `Connection` and `Timeout` — both indicate the request
@@ -674,10 +675,19 @@ mod tests {
     }
 
     #[test]
-    fn is_validation_error_is_status_400_or_bad_request() {
+    fn is_validation_error_is_status_400_only() {
         assert!(bad().is_validation_error());
         assert!(api(400).is_validation_error());
         assert!(!api(404).is_validation_error());
+        // A 422 is a `BadRequest`, but not a validation error (spec §8.1).
+        let unprocessable = Error::BadRequest {
+            status: 422,
+            code: error_codes::VALIDATION_ERROR.into(),
+            message: "x".into(),
+            request_id: None,
+            source: None,
+        };
+        assert!(!unprocessable.is_validation_error());
     }
 
     #[test]

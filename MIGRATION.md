@@ -39,7 +39,8 @@ the URL with `documents.get(id)` and download again.
 
 `is_auth_error()`, `is_rate_limit_error()` and `is_validation_error()` read the
 status (401/403, 429, 400). A `DOWNLOAD_FAILED` refused with 403 is now an auth
-error: the presigned URL expired or was refused.
+error: the presigned URL expired or was refused. A 422 (`Error::BadRequest`) is
+no longer a validation error: match `Error::BadRequest { .. }` if you need it.
 
 ### Messages and `Display`
 
