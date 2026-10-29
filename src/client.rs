@@ -119,7 +119,7 @@ impl ClientInner {
                         },
                     );
                 }
-                tokio::time::sleep(delay).await;
+                sleep_at_least(delay).await;
             }
 
             match self
@@ -127,18 +127,13 @@ impl ClientInner {
                 .await
             {
                 SendResult::Ok(resp) => return Ok(resp),
-                SendResult::Err {
-                    error,
-                    retryable,
-                    retry_after,
-                } => {
+                SendResult::Err { error, retry_after } => {
+                    if !error.is_retryable() {
+                        fire_error_hook(self.on_error.as_ref(), &error);
+                        return Err(error);
+                    }
                     last_error = Some(error);
                     next_retry_after = retry_after;
-                    if !retryable {
-                        let err = last_error.expect("last_error set above");
-                        fire_error_hook(self.on_error.as_ref(), &err);
-                        return Err(err);
-                    }
                 }
             }
         }
@@ -149,35 +144,16 @@ impl ClientInner {
     }
 
     /// Fetch the bytes at a presigned URL. Unauthenticated, single attempt,
-    /// no retries — per spec §5.5 the second-hop S3 fetch sits outside the
-    /// SDK's retry policy.
+    /// no retries — per spec §9.1 the second-hop storage fetch sits outside
+    /// the SDK's retry policy.
     ///
-    /// Errors map to [`Error::Download`].
+    /// Errors map to [`Error::Download`]: `Failed to download PDF: HTTP
+    /// <status>` for a non-2xx answer, `Failed to download PDF: network
+    /// error` (the transport error as `source`) when the storage does not
+    /// answer or the body fails while it is read.
     pub(crate) async fn fetch_bytes(&self, url: &str) -> Result<Bytes, Error> {
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| download_error(e, None))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(Error::Download {
-                message: format!(
-                    "Failed to download PDF: {} {}",
-                    status.as_u16(),
-                    status.canonical_reason().unwrap_or("")
-                )
-                .trim_end()
-                .to_owned(),
-                status: Some(status.as_u16()),
-                source: None,
-            });
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|e| download_error(e, Some(status.as_u16())))
+        let response = self.start_download(url).await?;
+        response.bytes().await.map_err(download_network_error)
     }
 
     /// Stream the bytes at a presigned URL chunk-by-chunk. Same auth/retry
@@ -187,42 +163,38 @@ impl ClientInner {
     /// before any bytes are read); subsequent reads on the returned stream
     /// surface chunk-level errors as [`Error::Download`].
     pub(crate) async fn stream_bytes(&self, url: &str) -> Result<PdfByteStream, Error> {
+        let response = self.start_download(url).await?;
+        Ok(PdfByteStream {
+            inner: Box::pin(response.bytes_stream()),
+        })
+    }
+
+    async fn start_download(&self, url: &str) -> Result<reqwest::Response, Error> {
         let response = self
             .http
             .get(url)
             .send()
             .await
-            .map_err(|e| download_error(e, None))?;
-        let status = response.status();
-        if !status.is_success() {
+            .map_err(download_network_error)?;
+        let status = response.status().as_u16();
+        if !response.status().is_success() {
             return Err(Error::Download {
-                message: format!(
-                    "Failed to download PDF: {} {}",
-                    status.as_u16(),
-                    status.canonical_reason().unwrap_or("")
-                )
-                .trim_end()
-                .to_owned(),
-                status: Some(status.as_u16()),
+                message: format!("Failed to download PDF: HTTP {status}"),
+                status: Some(status),
                 source: None,
             });
         }
-        Ok(PdfByteStream {
-            inner: Box::pin(response.bytes_stream()),
-        })
+        Ok(response)
     }
 }
 
-/// Convert a reqwest error from the second-hop S3 fetch into our
-/// [`Error::Download`] variant. The `status` argument is the response status
-/// when one was received before failing (e.g. body-read mid-stream); `None`
-/// otherwise.
-fn download_error(err: reqwest::Error, status: Option<u16>) -> Error {
-    let message = err.to_string();
-    let status = status.or_else(|| err.status().map(|s| s.as_u16()));
+/// A presigned-URL download that got no answer, or whose body failed while
+/// it was read: `DOWNLOAD_FAILED` without a status, the transport error as
+/// `source`.
+fn download_network_error(err: reqwest::Error) -> Error {
     Error::Download {
-        message,
-        status,
+        message: "Failed to download PDF: network error".to_owned(),
+        status: None,
         source: Some(Box::new(err)),
     }
 }
@@ -248,10 +220,7 @@ impl Stream for PdfByteStream {
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(bytes))),
-            Poll::Ready(Some(Err(e))) => {
-                let status = e.status().map(|s| s.as_u16());
-                Poll::Ready(Some(Err(download_error(e, status))))
-            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(download_network_error(e)))),
         }
     }
 }
@@ -271,7 +240,6 @@ impl ClientInner {
                     error: Error::InvalidOptions {
                         message: format!("could not build url for {}: {e}", attempt.path),
                     },
-                    retryable: false,
                     retry_after: None,
                 };
             }
@@ -307,22 +275,23 @@ impl ClientInner {
             },
         );
 
-        let start = std::time::Instant::now();
-        let send_fut = req.send();
-        let response = match tokio::time::timeout(per_attempt_timeout, send_fut).await {
+        // One deadline bounds the whole attempt, whatever client was
+        // injected: connecting, sending, the answer's head and its whole
+        // body, so a body that drips slowly cannot outlive the timeout.
+        let start = tokio::time::Instant::now();
+        let deadline = start + per_attempt_timeout;
+        let response = match tokio::time::timeout_at(deadline, req.send()).await {
             Err(_elapsed) => {
                 return SendResult::Err {
                     error: Error::Timeout {
                         timeout: per_attempt_timeout,
                     },
-                    retryable: true,
                     retry_after: None,
                 };
             }
             Ok(Err(e)) => {
                 return SendResult::Err {
-                    error: classify_reqwest_error(e, per_attempt_timeout),
-                    retryable: true,
+                    error: classify_reqwest_error(e, per_attempt_timeout, start.elapsed()),
                     retry_after: None,
                 };
             }
@@ -339,18 +308,34 @@ impl ClientInner {
             span.record("request_id", rid.as_str());
         }
 
-        let body = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                return SendResult::Err {
-                    error: classify_reqwest_error(e, per_attempt_timeout),
-                    retryable: true,
-                    retry_after: None,
-                };
-            }
+        // The body is read inside the attempt, under the same deadline.
+        let body = match tokio::time::timeout_at(deadline, response.bytes()).await {
+            Ok(Ok(b)) => Ok(b),
+            Ok(Err(e)) => Err(BodyFailure::Read(e)),
+            Err(elapsed) => Err(BodyFailure::Timeout(elapsed)),
         };
 
         if (200..300).contains(&status) {
+            let body = match body {
+                Ok(b) => b,
+                // A 2xx answer cut off mid-body is this attempt's
+                // `network_error`, a body that outlasts the deadline its
+                // `timeout`: both retried (spec §9.1).
+                Err(BodyFailure::Timeout(_)) => {
+                    return SendResult::Err {
+                        error: Error::Timeout {
+                            timeout: per_attempt_timeout,
+                        },
+                        retry_after: None,
+                    };
+                }
+                Err(BodyFailure::Read(e)) => {
+                    return SendResult::Err {
+                        error: classify_reqwest_error(e, per_attempt_timeout, start.elapsed()),
+                        retry_after: None,
+                    };
+                }
+            };
             let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
             fire_response_hook(
                 self.on_response.as_ref(),
@@ -368,9 +353,26 @@ impl ClientInner {
             });
         }
 
-        // non-2xx: classify, parse error, mark retryable per spec §6.
-        let retryable = status >= 500 || status == 429;
-        let retry_after = if retryable {
+        // Non-2xx. A body that failed while it was read (dropped, or past
+        // the deadline) is a malformed error body (spec §8.2): never a code
+        // taken from the partial bytes, the real status and request id kept,
+        // the read error as `source`, retried by its status.
+        let (code, message, source) = match body {
+            Ok(b) => {
+                let (code, message) = parse_error_body(&b, status);
+                (code, message, None)
+            }
+            Err(failure) => (
+                crate::error::error_codes::INTERNAL_ERROR.to_owned(),
+                format!("HTTP {status}"),
+                Some(failure.into_source()),
+            ),
+        };
+        let error = classify_api_error(status, code, message, request_id, source);
+        // One rule for the retry loop and for `Error::is_retryable`. Only
+        // `Retry-After` is read; `Retry-After-Ms` is ignored.
+        let retry_after = if error.is_retryable() {
+            warn!(status, code = error.code(), "retryable api error");
             headers
                 .get(http::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
@@ -378,15 +380,21 @@ impl ClientInner {
         } else {
             None
         };
-        let (code, message) = parse_error_body(&body, status);
-        let error = classify_api_error(status, code, message, request_id);
-        if retryable {
-            warn!(status, code = error.code(), "retryable api error");
-        }
-        SendResult::Err {
-            error,
-            retryable,
-            retry_after,
+        SendResult::Err { error, retry_after }
+    }
+}
+
+/// Why an answer's body could not be read in full.
+enum BodyFailure {
+    Read(reqwest::Error),
+    Timeout(tokio::time::error::Elapsed),
+}
+
+impl BodyFailure {
+    fn into_source(self) -> Box<dyn std::error::Error + Send + Sync> {
+        match self {
+            BodyFailure::Read(e) => Box::new(e),
+            BodyFailure::Timeout(e) => Box::new(e),
         }
     }
 }
@@ -394,24 +402,25 @@ impl ClientInner {
 enum SendResult {
     Ok(ParsedResponse),
     Err {
+        /// Retried when [`Error::is_retryable`] says so.
         error: Error,
-        retryable: bool,
         retry_after: Option<Duration>,
     },
 }
 
-/// Map a `reqwest::Error` to our `Error` enum. Timeout from reqwest itself
-/// (vs the tokio::time::timeout outer wrapper) is rare but possible — both
-/// route to `Error::Timeout`.
-fn classify_reqwest_error(err: reqwest::Error, attempt_timeout: Duration) -> Error {
+/// Map a `reqwest::Error` to our `Error` enum: `network_error` with the
+/// spec's message and the reqwest error as `source`, or `timeout` when a
+/// timeout of an injected `reqwest::Client` fired before the SDK's own. The
+/// timeout then names the bound that was hit: the time the attempt ran.
+fn classify_reqwest_error(err: reqwest::Error, attempt_timeout: Duration, ran: Duration) -> Error {
     if err.is_timeout() {
+        let ran = Duration::from_millis(u64::try_from(ran.as_millis()).unwrap_or(u64::MAX));
         return Error::Timeout {
-            timeout: attempt_timeout,
+            timeout: ran.min(attempt_timeout),
         };
     }
-    let message = err.to_string();
     Error::Connection {
-        message,
+        message: "Network request failed".to_owned(),
         source: Box::new(err),
     }
 }
@@ -423,6 +432,7 @@ fn classify_api_error(
     code: String,
     message: String,
     request_id: Option<String>,
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
 ) -> Error {
     match status {
         400 | 422 => Error::BadRequest {
@@ -430,42 +440,49 @@ fn classify_api_error(
             code,
             message,
             request_id,
+            source,
         },
         401 => Error::Auth {
             status,
             code,
             message,
             request_id,
+            source,
         },
         403 => Error::PermissionDenied {
             status,
             code,
             message,
             request_id,
+            source,
         },
         404 => Error::NotFound {
             status,
             code,
             message,
             request_id,
+            source,
         },
         410 => Error::Gone {
             status,
             code,
             message,
             request_id,
+            source,
         },
         429 => Error::RateLimited {
             status,
             code,
             message,
             request_id,
+            source,
         },
         _ => Error::Api {
             status,
             code,
             message,
             request_id,
+            source,
         },
     }
 }
@@ -661,16 +678,25 @@ impl PoliPageBuilder {
     /// the `reqwest` level — the AWS / Stripe / Azure SDK pattern.
     ///
     /// **Interaction with other setters:** the SDK's [`Self::timeout`] is
-    /// enforced at the SDK layer (via `tokio::time::timeout`) and applies
-    /// regardless of whether you supply your own client. Any timeout
+    /// enforced at the SDK layer (one `tokio` deadline per attempt, covering
+    /// the connection, the request, the answer and its whole body) and
+    /// applies regardless of whether you supply your own client. Any timeout
     /// configured on the supplied [`reqwest::Client`] applies on top — the
     /// effective deadline is `min(sdk_timeout, reqwest_timeout)`.
+    ///
+    /// **Resends:** the SDK's own client never lets reqwest resend a request
+    /// (its default retry policy resends some refused HTTP/2 requests).
+    /// For a client you supply, build it with
+    /// `.retry(reqwest::retry::never())` too, so that every resend is one
+    /// of the SDK's counted retries: the API does not deduplicate on
+    /// `Idempotency-Key`.
     ///
     /// ```no_run
     /// use poli_page::PoliPage;
     /// # fn run() -> Result<(), poli_page::Error> {
     /// let http = reqwest::Client::builder()
     ///     .pool_max_idle_per_host(32)
+    ///     .retry(reqwest::retry::never())
     ///     .build()
     ///     .map_err(|e| poli_page::Error::InvalidOptions {
     ///         message: format!("custom http client: {e}"),
@@ -747,7 +773,7 @@ impl PoliPageBuilder {
         let api_key = self.api_key.unwrap_or_default();
         if api_key.is_empty() {
             return Err(Error::InvalidOptions {
-                message: "api_key is required".into(),
+                message: "apiKey is required".into(),
             });
         }
         let base_url_str = self
@@ -766,7 +792,7 @@ impl PoliPageBuilder {
         };
         let http = match self.http_client {
             Some(client) => client,
-            None => reqwest::Client::builder()
+            None => sdk_http_client_builder()
                 .build()
                 .map_err(|e| Error::InvalidOptions {
                     message: format!("could not build reqwest::Client: {e}"),
@@ -788,6 +814,36 @@ impl PoliPageBuilder {
     }
 }
 
+/// The `reqwest` client the SDK builds when none is injected.
+///
+/// Every resend must be the SDK's own retry, counted by `max_retries` and
+/// reported to `on_request` / `on_retry`: the API does not deduplicate on
+/// `Idempotency-Key`, so a render sent twice can be stored twice. reqwest's
+/// default retry policy resends a request the server refused over HTTP/2
+/// (`REFUSED_STREAM`, a graceful `GOAWAY`), so it is turned off. HTTP/2 is
+/// not one of the SDK's reqwest features, but Cargo feature unification
+/// turns it on when the application's own reqwest has it.
+///
+/// What stays below reqwest: hyper's pooled client sends a request again on
+/// a new connection only when none of it was written to the reused one
+/// (hyper-util's `retry_canceled_requests`). The server never saw that
+/// request, so it is not a resend. A request that was written and then lost
+/// its connection always comes back as an error.
+pub(crate) fn sdk_http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder().retry(reqwest::retry::never())
+}
+
+/// Sleep for at least `delay`: if the timer wakes early on the monotonic
+/// clock, sleep again for the rest (spec §9.2). `tokio::time::Instant`
+/// follows a paused test clock, so this never spins under
+/// `tokio::time::pause`.
+async fn sleep_at_least(delay: Duration) {
+    let end = tokio::time::Instant::now() + delay;
+    while tokio::time::Instant::now() < end {
+        tokio::time::sleep_until(end).await;
+    }
+}
+
 // `new_v4_string` is the auto-generation site for the Idempotency-Key header
 // on POSTs that the caller didn't override. Centralised in the orchestrator so
 // every POST path picks it up uniformly.
@@ -803,7 +859,9 @@ mod tests {
     fn builder_requires_api_key() {
         let err = PoliPage::builder().build().expect_err("empty build");
         assert!(matches!(err, Error::InvalidOptions { .. }));
-        assert!(err.to_string().contains("api_key"));
+        // Spec §8.3: the exact text, the same in every SDK.
+        assert_eq!(err.message(), "apiKey is required");
+        assert_eq!(err.to_string(), "apiKey is required");
     }
 
     #[test]
@@ -813,6 +871,7 @@ mod tests {
             .build()
             .expect_err("empty key");
         assert!(matches!(err, Error::InvalidOptions { .. }));
+        assert_eq!(err.message(), "apiKey is required");
     }
 
     #[test]
@@ -871,6 +930,173 @@ mod tests {
     fn auto_idempotency_key_returns_uuid_v4() {
         let k = auto_idempotency_key();
         assert_eq!(k.len(), 36);
+    }
+
+    // --- no hidden resend -------------------------------------------------
+    //
+    // reqwest's default retry policy resends a request the server refused
+    // over HTTP/2 (`REFUSED_STREAM`), on the same connection, without the
+    // SDK seeing it: `on_request` fires once, `max_retries` does not count
+    // it. `sdk_http_client_builder` turns that policy off. HTTP/2 needs
+    // reqwest's `http2` feature, on here through the dev-dependencies (an
+    // application's own reqwest can turn it on the same way).
+
+    /// An h2c server that refuses its first `refused` streams and answers
+    /// the others `200 {}`. Returns its origin and counters of the TCP
+    /// connections and the streams it saw.
+    async fn refusing_h2_server(
+        refused: usize,
+    ) -> (
+        String,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let origin = format!("http://{}", listener.local_addr().expect("addr"));
+        let connections = Arc::new(AtomicUsize::new(0));
+        let streams = Arc::new(AtomicUsize::new(0));
+        let (conns, strs) = (Arc::clone(&connections), Arc::clone(&streams));
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                conns.fetch_add(1, Ordering::SeqCst);
+                let strs = Arc::clone(&strs);
+                tokio::spawn(async move {
+                    let Ok(mut conn) = h2::server::handshake(socket).await else {
+                        return;
+                    };
+                    while let Some(Ok((_request, mut respond))) = conn.accept().await {
+                        if strs.fetch_add(1, Ordering::SeqCst) < refused {
+                            respond.send_reset(h2::Reason::REFUSED_STREAM);
+                            continue;
+                        }
+                        let head = http::Response::builder()
+                            .status(200)
+                            .header("content-type", "application/json")
+                            .body(())
+                            .expect("response head");
+                        if let Ok(mut body) = respond.send_response(head, false) {
+                            let _ = body.send_data(Bytes::from_static(b"{}"), true);
+                        }
+                    }
+                });
+            }
+        });
+        (origin, connections, streams)
+    }
+
+    fn h2_client(
+        origin: &str,
+        http: reqwest::Client,
+        max_retries: u32,
+    ) -> (PoliPage, Arc<std::sync::atomic::AtomicUsize>) {
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&attempts);
+        let client = PoliPage::builder()
+            .api_key("pp_sandbox_x")
+            .base_url(origin)
+            .max_retries(max_retries)
+            .retry_delay(Duration::from_millis(1))
+            .timeout(Duration::from_secs(2))
+            .http_client(http)
+            .on_request(move |_| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+            .build()
+            .expect("client");
+        (client, attempts)
+    }
+
+    fn thumbnails(
+        client: &PoliPage,
+    ) -> impl std::future::Future<Output = Result<Vec<crate::Thumbnail>, Error>> + '_ {
+        // Answers `{}`: a POST whose 200 body is not a thumbnails envelope
+        // still shows whether the request went through.
+        client.documents.thumbnails("doc_abc123", None)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_hidden_resend_of_a_refused_http2_post() {
+        use std::sync::atomic::Ordering;
+        let (origin, connections, streams) = refusing_h2_server(1).await;
+        let http = sdk_http_client_builder()
+            .http2_prior_knowledge()
+            .build()
+            .expect("reqwest client");
+        let (client, attempts) = h2_client(&origin, http, 0);
+        let err = thumbnails(&client).await.expect_err("refused");
+        assert_eq!(err.code(), "network_error", "{err:?}");
+        assert_eq!(streams.load(Ordering::SeqCst), 1, "the POST went out once");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_http2_post_is_resent_only_as_a_counted_retry() {
+        use std::sync::atomic::Ordering;
+        let (origin, _, streams) = refusing_h2_server(1).await;
+        let http = sdk_http_client_builder()
+            .http2_prior_knowledge()
+            .build()
+            .expect("reqwest client");
+        let (client, attempts) = h2_client(&origin, http, 1);
+        // The retry reaches the 200, whose `{}` is not a thumbnails body.
+        let err = thumbnails(&client).await.expect_err("not an envelope");
+        assert_eq!(err.code(), "INTERNAL_ERROR", "{err:?}");
+        assert_eq!(err.status(), Some(200));
+        assert_eq!(streams.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "both sends are SDK attempts"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn control_reqwest_default_client_resends_a_refused_http2_post() {
+        // Control: the same request through reqwest's default policy is
+        // sent twice on one connection for a single SDK attempt. This is
+        // what `sdk_http_client_builder` prevents.
+        use std::sync::atomic::Ordering;
+        let (origin, connections, streams) = refusing_h2_server(1).await;
+        let http = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .expect("reqwest client");
+        let (client, attempts) = h2_client(&origin, http, 0);
+        let _ = thumbnails(&client).await;
+        assert_eq!(streams.load(Ordering::SeqCst), 2, "reqwest resent the POST");
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            1,
+            "on the same connection"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "the SDK saw one attempt"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_at_least_follows_a_paused_clock() {
+        // Never spins: the paused clock jumps to the deadline.
+        let start = tokio::time::Instant::now();
+        sleep_at_least(Duration::from_secs(30)).await;
+        assert!(tokio::time::Instant::now() - start >= Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn sleep_at_least_never_wakes_before_the_delay() {
+        for ms in [1u64, 2, 5, 10, 15, 20] {
+            let delay = Duration::from_millis(ms);
+            let start = std::time::Instant::now();
+            sleep_at_least(delay).await;
+            let slept = start.elapsed();
+            assert!(slept >= delay, "slept {slept:?} for a {delay:?} delay");
+        }
     }
 
     #[test]

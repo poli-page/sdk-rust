@@ -83,6 +83,7 @@ mod tests {
                 code: "INTERNAL".into(),
                 message: "boom".into(),
                 request_id: Some("req_xyz".into()),
+                source: None,
             },
         };
         let cloned = evt.clone();

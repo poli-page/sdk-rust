@@ -18,17 +18,20 @@ use url::Url;
 use crate::internal::constants::{HEADER_IDEMPOTENCY_KEY, RETRY_AFTER_CAP};
 
 /// Parse the `Retry-After` response header. Accepts either an integer number
-/// of seconds or an HTTP-date. Returns the delay, capped at `RETRY_AFTER_CAP`
-/// (30 s). Returns `None` for empty or unparseable inputs. Past dates yield
-/// `Some(Duration::ZERO)` — the caller decides whether to retry immediately
-/// or skip the sleep entirely.
+/// of seconds (digits only, RFC 9110 `delay-seconds`) or an HTTP-date.
+/// Returns the delay, capped at `RETRY_AFTER_CAP` (30 s): an integer too
+/// large for any integer type clamps to the cap too. Returns `None` for
+/// empty or unparseable inputs (`soon`, `1.5`, `-1`), so the backoff applies.
+/// Past dates yield `Some(Duration::ZERO)`: retry at once.
 pub(crate) fn parse_retry_after(header_value: &str) -> Option<Duration> {
+    let header_value = header_value.trim();
     if header_value.is_empty() {
         return None;
     }
-    if let Ok(secs) = header_value.parse::<i64>() {
-        let clamped = secs.max(0) as u64;
-        return Some(Duration::from_secs(clamped).min(RETRY_AFTER_CAP));
+    if header_value.bytes().all(|b| b.is_ascii_digit()) {
+        // Only digits: an overflow can only mean a huge number of seconds.
+        let secs = header_value.parse::<u64>().unwrap_or(u64::MAX);
+        return Some(Duration::from_secs(secs).min(RETRY_AFTER_CAP));
     }
     let when = httpdate::parse_http_date(header_value).ok()?;
     let now = SystemTime::now();
@@ -67,43 +70,29 @@ pub(crate) fn compute_backoff_with_jitter(
         .mul_f64(jitter_factor)
 }
 
-/// Parse a non-2xx response body into a `(code, message)` pair.
+/// Parse a non-2xx response body into a `(code, message)` pair (spec §8.2).
 ///
 /// The code is the body's `code`, else its `error`, else `"unknown_error"`
-/// (the API's error body is `{ error, detail?, issues?, requestId }`).
-/// Bodies that aren't valid JSON (HTML error pages, empty responses)
-/// collapse to `INTERNAL_ERROR` with a status-bearing message.
+/// (the API's error body is `{ error, detail?, issues?, requestId }`). The
+/// message is its `detail`, else `title`, else `message`, else
+/// `HTTP <status>`. A field that is not a string is ignored, and JSON that is
+/// not an object has none of them. A body that is not JSON (an HTML gateway
+/// page, an empty body) gives `INTERNAL_ERROR` and `HTTP <status>`.
 pub(crate) fn parse_error_body(body: &[u8], status: u16) -> (String, String) {
-    #[derive(serde::Deserialize)]
-    struct ErrorBody {
-        code: Option<String>,
-        detail: Option<String>,
-        title: Option<String>,
-        message: Option<String>,
-        error: Option<String>,
-    }
-
-    // RFC 7807: prefer `detail` (specific reason) over `title` (generic name)
-    // over the legacy `message` field; fall back to a short canned status string.
-    // The code is verbatim from the API — never inferred from message.
-    match serde_json::from_slice::<ErrorBody>(body) {
-        Ok(b) => {
-            let code = b
-                .code
-                .or(b.error)
-                .unwrap_or_else(|| "unknown_error".to_string());
-            let message = b
-                .detail
-                .or(b.title)
-                .or(b.message)
-                .unwrap_or_else(|| format!("HTTP {status}"));
-            (code, message)
-        }
-        Err(_) => (
-            "INTERNAL_ERROR".to_string(),
-            format!("HTTP {status}: response body was not valid JSON"),
-        ),
-    }
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return ("INTERNAL_ERROR".to_string(), format!("HTTP {status}"));
+    };
+    let field = |name: &str| json.get(name).and_then(serde_json::Value::as_str);
+    // The code is verbatim from the API — never inferred from the message.
+    let code = field("code")
+        .or_else(|| field("error"))
+        .unwrap_or("unknown_error")
+        .to_string();
+    let message = field("detail")
+        .or_else(|| field("title"))
+        .or_else(|| field("message"))
+        .map_or_else(|| format!("HTTP {status}"), str::to_string);
+    (code, message)
 }
 
 /// Build the standard request headers (spec §5.3).
@@ -187,6 +176,27 @@ mod tests {
     fn parse_retry_after_caps_large_second_values_at_30s() {
         assert_eq!(parse_retry_after("999"), Some(Duration::from_secs(30)));
         assert_eq!(parse_retry_after("100000"), Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn parse_retry_after_clamps_an_integer_too_large_for_u64_to_30s() {
+        assert_eq!(
+            parse_retry_after("99999999999999999999999999"),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            parse_retry_after(&u64::MAX.to_string()),
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_ignores_values_that_are_not_delay_seconds() {
+        // RFC 9110: delay-seconds is 1*DIGIT. Anything else falls back to
+        // the backoff.
+        assert_eq!(parse_retry_after("-1"), None);
+        assert_eq!(parse_retry_after("1.5"), None);
+        assert_eq!(parse_retry_after("soon"), None);
     }
 
     #[test]
@@ -343,7 +353,22 @@ mod tests {
     fn parse_error_body_returns_internal_error_for_non_json_body() {
         let (code, message) = parse_error_body(b"not json", 502);
         assert_eq!(code, "INTERNAL_ERROR");
-        assert_eq!(message, "HTTP 502: response body was not valid JSON");
+        assert_eq!(message, "HTTP 502");
+    }
+
+    #[test]
+    fn parse_error_body_ignores_fields_that_are_not_strings() {
+        let (code, message) =
+            parse_error_body(br#"{"code":5,"error":"X","detail":null,"title":"T"}"#, 400);
+        assert_eq!(code, "X");
+        assert_eq!(message, "T");
+    }
+
+    #[test]
+    fn parse_error_body_reads_json_that_is_not_an_object_as_having_no_fields() {
+        let (code, message) = parse_error_body(b"[1,2]", 503);
+        assert_eq!(code, "unknown_error");
+        assert_eq!(message, "HTTP 503");
     }
 
     #[test]
