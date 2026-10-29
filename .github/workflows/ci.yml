@@ -149,3 +149,17 @@ jobs:
   #   runs-on: ubuntu-latest
   #   if: github.event_name == 'pull_request'
   #   ...
+
+  # One check that sums up the PR jobs: the name the `main` ruleset requires for merges
+  # (the poli-page auto loop's gate waits for a check named `ci`).
+  ci:
+    if: always()
+    needs: [test, msrv, coverage, deny, audit, consumer-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
+      - run: test "${{ needs.msrv.result }}" = success
+      - run: test "${{ needs.coverage.result }}" = success
+      - run: test "${{ needs.deny.result }}" = success
+      - run: test "${{ needs.audit.result }}" = success
+      - run: test "${{ needs.consumer-smoke.result }}" = success
