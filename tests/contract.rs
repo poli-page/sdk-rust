@@ -468,7 +468,9 @@ async fn write_answer(
             }
             serde_json::to_vec(&v).map_err(std::io::Error::other)?
         }
-        Body::Text(t) => t.clone().into_bytes(),
+        Body::Text(t) => substitute_str(t, origin)
+            .map_err(std::io::Error::other)?
+            .into_bytes(),
         Body::Bytes(b) => b.clone(),
     };
     let reason = http::StatusCode::from_u16(status)
@@ -869,11 +871,26 @@ async fn run_case(c: &SdkCase) -> Result<(), String> {
     };
     let result = match built {
         Err(e) => Err(e),
-        // A stopped call is abandoned: dropping its future cancels it.
-        Ok(client) => tokio::select! {
-            r = invoke(&client, &c.call) => r?,
-            () = stop.notified() => Ok(Value::Null),
-        },
+        // A stopped call is abandoned: dropping its future cancels it. The
+        // stop branch is polled first, and a retry always yields once (even
+        // with no delay), so no attempt starts after the stop.
+        Ok(client) => {
+            let call = SdkCall {
+                method: c.call.method.clone(),
+                args: c
+                    .call
+                    .args
+                    .iter()
+                    .map(|a| substitute(a, &server.origin))
+                    .collect::<Result<_, _>>()?,
+                cancel_after_ms: None,
+            };
+            tokio::select! {
+                biased;
+                () = stop.notified() => Ok(Value::Null),
+                r = invoke(&client, &call) => r?,
+            }
+        }
     };
     let mock = server.origin.clone();
     let recorded = server.close();
@@ -992,6 +1009,12 @@ fn trials() -> Vec<Trial> {
                 continue;
             }
         };
+        // Any placeholder anywhere in the case, answers never served
+        // included, must be one the contract defines.
+        if let Err(e) = substitute(raw, "http://127.0.0.1:1") {
+            trials.push(failing(&id, e));
+            continue;
+        }
         if case.requires.as_deref() == Some("cancellation") && !runs_cancellation {
             trials.push(
                 Trial::test(&id, || Ok(()))

@@ -792,6 +792,8 @@ impl PoliPageBuilder {
         };
         let http = match self.http_client {
             Some(client) => client,
+            // Always through `sdk_http_client_builder`: it turns off
+            // reqwest's own resends (see its doc and `no_hidden_resend_*`).
             None => sdk_http_client_builder()
                 .build()
                 .map_err(|e| Error::InvalidOptions {
@@ -837,7 +839,15 @@ pub(crate) fn sdk_http_client_builder() -> reqwest::ClientBuilder {
 /// clock, sleep again for the rest (spec §9.2). `tokio::time::Instant`
 /// follows a paused test clock, so this never spins under
 /// `tokio::time::pause`.
+///
+/// A zero delay still yields to the runtime once, so a retry is always a
+/// point where a caller that dropped or abandoned the call can stop it
+/// before the next attempt is sent.
 async fn sleep_at_least(delay: Duration) {
+    if delay.is_zero() {
+        tokio::task::yield_now().await;
+        return;
+    }
     let end = tokio::time::Instant::now() + delay;
     while tokio::time::Instant::now() < end {
         tokio::time::sleep_until(end).await;
@@ -1086,6 +1096,13 @@ mod tests {
         let start = tokio::time::Instant::now();
         sleep_at_least(Duration::from_secs(30)).await;
         assert!(tokio::time::Instant::now() - start >= Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn sleep_at_least_yields_once_for_a_zero_delay() {
+        let mut sleep = std::pin::pin!(sleep_at_least(Duration::ZERO));
+        assert!(futures_util::poll!(&mut sleep).is_pending());
+        sleep.await;
     }
 
     #[tokio::test]

@@ -41,7 +41,7 @@ async fn main() {
 
 For cross-language parity the enum exposes `is_auth_error()`, `is_rate_limit_error()`, `is_validation_error()`, `is_network_error()`, and `is_retryable()`. Use them when you don't need to bind the inner fields. They read the status, the same in every Poli Page SDK: `is_auth_error()` is status 401 or 403 (a `DOWNLOAD_FAILED` refused with 403 too), `is_rate_limit_error()` 429, `is_validation_error()` 400 only (an `Error::BadRequest` with 422 is not one), `is_network_error()` is `network_error` or `timeout`, and `is_retryable()` is what the SDK retries: a network error, a timeout, a 5xx or a 429, except `QUOTA_EXCEEDED`, `OVERAGE_CAP_EXCEEDED` and `STORAGE_ACCESS_DENIED`; never `aborted` or `DOWNLOAD_FAILED`.
 
-`err.message()` is the bare explanation. For SDK-side errors it is the exact text below, the same in every Poli Page SDK, and `Display` shows it as is; for API errors it is the body's `detail`, `title` or `message`, else `HTTP <status>`, and `Display` adds the kind and status (`not found (404): …`). The transport error behind a network, timeout or download failure is the error's `source()`.
+`err.message()` is the bare explanation. For SDK-side errors it is the exact text below, the same in every Poli Page SDK, and `Display` shows it as is; for API errors it is the body's `detail`, `title` or `message`, else `HTTP <status>`, and `Display` adds the kind and status (`not found (404): …`). The transport error behind a network or download failure, and the read error behind a malformed error body, is the error's `source()`; `Error::Timeout` has no source.
 
 ## SDK-internal codes
 

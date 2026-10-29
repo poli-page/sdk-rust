@@ -48,7 +48,10 @@ pub enum Error {
     /// `Request timed out after <timeout in ms>ms`.
     #[error("Request timed out after {}ms", .timeout.as_millis())]
     Timeout {
-        /// The per-attempt timeout that was hit.
+        /// The bound that was hit: the client's per-attempt timeout, or, when
+        /// a timeout of an injected `reqwest::Client` fired first, the time
+        /// the attempt ran (whole milliseconds, at most the per-attempt
+        /// timeout).
         timeout: Duration,
     },
 
