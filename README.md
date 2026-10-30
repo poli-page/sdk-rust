@@ -149,7 +149,7 @@ For sync callers (short scripts, CLI tools, callers from a non-async host), opt 
 
 ```toml
 [dependencies]
-poli-page = { version = "0.10", features = ["blocking"] }
+poli-page = { version = "0.11", features = ["blocking"] }
 ```
 
 ```rust,no_run

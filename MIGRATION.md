@@ -4,7 +4,7 @@ This document records breaking changes between versions of `poli-page`
 and the upgrade path for downstream code. Before `1.0.0`, a breaking
 change bumps the minor version (`0.(x+1).0`), per Cargo's 0.x semver rules.
 
-## From 0.10.0 to the next release (unreleased)
+## From 0.10.0 to 0.11.0
 
 The SDK now follows the retry policy and the error messages of the Poli Page
 API contract.
@@ -24,7 +24,7 @@ if err.is_retryable() { // was true for QUOTA_EXCEEDED
     requeue(job);
 }
 
-// next release
+// 0.11.0
 match err.code() {
     error_codes::QUOTA_EXCEEDED | error_codes::OVERAGE_CAP_EXCEEDED => hold_until_monthly_reset(job),
     _ if err.is_retryable() => requeue(job),
@@ -74,7 +74,7 @@ gives the known variant; `as_str()` returns the wire value.
 // 0.10.0
 if descriptor.format == PageFormat::Unknown { /* the value was lost */ }
 
-// next release
+// 0.11.0
 if let PageFormat::Unknown(name) = &descriptor.format {
     log::info!("page format {name} is newer than this SDK");
 }

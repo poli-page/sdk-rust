@@ -10,8 +10,6 @@ This document defines **how** to build, test, validate, and ship an SDK so that 
 Companion docs (all co-located in the `sdk-node` repo):
 - `sdk-specification.md` (v1.3) — wire-and-runtime contract every SDK MUST implement.
 - `sdk-roadmap.md` (v1.2) — what to build, in which order, and why (multi-language fleet).
-- `implementation-plan-master-mickael.md` — operating manual for the full client-side scope (templates, SDKs, integrations, quickstarts).
-- `implementation-plan-sdk-node.md` — per-session plan for the canonical Node SDK.
 - `PLAN.md` — unified live plan: current state, gaps to v1.0, sequencing.
 
 ---
@@ -483,10 +481,10 @@ Commit speed matters during a working session; push speed is fine to spend on va
 
 ## 9. Examples and quickstart (cross-reference)
 
-The dedicated `sdk-demo-specification.md` has been retired. The runnable-example story is now split into two pieces, both defined in `implementation-plan-master-mickael.md`:
+The dedicated `sdk-demo-specification.md` has been retired. The runnable-example story is now split into two pieces, both described below:
 
 - **`examples/` recipes** — per-framework or per-runtime usage examples (Express, Fastify, Koa, plain Node, AWS Lambda for Node; net/http, Gin, Echo, Fiber, Chi for Go; Flask, Celery, Jupyter for Python; WordPress, WooCommerce, Slim for PHP). Each recipe is a self-contained runnable program with its own README. Per `sdk-roadmap.md`, recipes live both in the SDK repo's `examples/` folder AND on docs.poli.page (the doc syncs from the repo).
-- **`examples/quickstart/`** — one canonical 30-second quickstart in every SDK and integration repo. It renders the shared `welcome` template against the API using a sandbox key, and is the manual smoke test before every release. Spec is in `implementation-plan-templates-and-quickstarts.md` (when produced).
+- **`examples/quickstart/`** — one canonical 30-second quickstart in every SDK and integration repo. It renders the shared `welcome` template against the API using a sandbox key, and is the manual smoke test before every release.
 
 Connections to the engineering practices in this guide:
 
@@ -508,7 +506,7 @@ These are items where the right answer for an ecosystem hasn't been settled yet.
 - **Java/Kotlin**: blocking `HttpClient` or async `WebClient` / `OkHttp`? Same trade-off as Rust.
 - **.NET**: target `net8.0` only or also `netstandard2.0` for legacy users? The latter doubles compatibility and roughly doubles surface to validate.
 
-When in doubt, the rule from `sdk-specification.md` §10 applies: open a discussion in `poli-page/sdk-node` or with Xavier directly. Public-API decisions ripple across the fleet; don't make them solo.
+When in doubt, the rule from `sdk-specification.md` §10 applies: open a discussion in `poli-page/sdk-node`. Public-API decisions ripple across the fleet; don't make them solo.
 
 ---
 
@@ -534,5 +532,5 @@ When this guide is silent, copy what the Node SDK does. When the Node SDK is wro
 ## Changelog
 
 - **v1.2 — 2026-05-19** — Hardened the publish-readiness baseline based on first-publish audit of the Node SDK. §2.1 grew a `.github/` directory table (issue templates, PR template, `CODEOWNERS`, `dependabot.yml`). §4.1 grew an OS-matrix note (Linux full × Node matrix + single Windows LTS job; `defaults.run.shell: bash`). New gates §4.11 *Supply-chain audit* (registry-signature verification + CodeQL on `push`/`pull_request`/weekly) and §4.12 *Dependency automation* (weekly Dependabot, grouped dev-deps). §4.13 tooling table extended with Signature audit / Static analysis / Dep automation columns across all eight ecosystems. §6.3 promoted from MAY → SHOULD and rewritten to spell out the workflow contract (input vs manifest check, tag-doesn't-exist check, environment-gated publish, tag-on-success). Reference-implementation list updated to call out the new files (`release.yml`, `codeql.yml`, `dependabot.yml`).
-- **v1.1 — 2026-05-12** — Relocated from `poli-page/docs/onboarding/micka/` into the `sdk-node` repo root, alongside the contract and roadmap. Companion-docs section repointed: `sdk-specification.md` bumped to v1.3 reference, `sdk-roadmap.md` to v1.2; `sdk-demo-specification.md` discarded (replaced by the `examples/` recipes + `examples/quickstart/` story owned by `implementation-plan-master-mickael.md`); `agent-guide.md` no longer referenced as a peer companion — its TDD/Conventional-Commits/working-method content is captured by `CONTRIBUTING.md` in each repo. §9 rewritten to describe the new examples-and-quickstart split.
+- **v1.1 — 2026-05-12** — Relocated into the `sdk-node` repo root, alongside the contract and roadmap. Companion-docs section repointed: `sdk-specification.md` bumped to v1.3 reference, `sdk-roadmap.md` to v1.2; `sdk-demo-specification.md` discarded (replaced by the `examples/` recipes + `examples/quickstart/` story); `agent-guide.md` no longer referenced as a peer companion — its TDD/Conventional-Commits/working-method content is captured by `CONTRIBUTING.md` in each repo. §9 rewritten to describe the new examples-and-quickstart split.
 - **v1.0 — Initial** — SHOULD/MAY engineering practices for every official Poli Page SDK (CI gates, release flow, repo hygiene, prerelease channel, pre-push hook, demo cross-reference, open questions per ecosystem).
