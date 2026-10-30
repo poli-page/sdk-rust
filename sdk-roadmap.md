@@ -1,9 +1,9 @@
 # SDK Roadmap
 
 **Version**: 1.2
-**Audience**: Mickael, building the Poli Page SDK ecosystem.
+**Audience**: the maintainers building the Poli Page SDK ecosystem.
 **Purpose**: explain *what* to build, *in which order*, and *why* — so you
-can drive each phase autonomously without round-tripping with Xavier on
+can drive each phase autonomously without round-tripping on
 prioritization.
 
 This document is a companion to:
@@ -159,9 +159,9 @@ These apply to every repo, core or integration.
 
 ---
 
-## Estimated effort (Claude-assisted, solo developer)
+## Estimated effort (AI-assisted, solo developer)
 
-With Claude-assisted development, the effort estimates are
+With AI-assisted development, the effort estimates are
 substantially lower than traditional solo timelines.
 
 | Phase | Approximate duration |
@@ -180,9 +180,9 @@ throughout. Adjust as feedback comes in from each released phase.
 
 ## Communication and review
 
-- Day-to-day questions and decisions: Xavier directly, in French.
+- Day-to-day questions and decisions: the project owner, directly.
 - Anything that touches the public API contract (in
-  `sdk-specification.md`): discuss with Xavier *before* implementing
+  `sdk-specification.md`): discuss with the project owner *before* implementing
   — a change there ripples through every existing SDK and integration.
 - When stuck, prefer asking early over building something that may
   need to be undone.
@@ -206,7 +206,7 @@ throughout. Adjust as feedback comes in from each released phase.
     Tomasz persona
   - Phase 1 internal order: NestJS before Next.js (mechanical port
     benefits Next.js)
-  - Estimated effort recalibrated for Claude-assisted development:
+  - Estimated effort recalibrated for AI-assisted development:
     total ~3-4 weeks instead of ~6 months
   - Recipes convention clarified: present both in `examples/` and on
     docs.poli.page
