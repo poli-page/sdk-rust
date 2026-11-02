@@ -20,7 +20,7 @@ Official Rust SDK for [Poli Page](https://poli.page) — render polished PDFs fr
 
 ```toml
 [dependencies]
-poli-page  = "0.10"
+poli-page  = "0.13"
 serde_json = "1"
 tokio      = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -28,11 +28,11 @@ tokio      = { version = "1", features = ["macros", "rt-multi-thread"] }
 Or via `cargo add`:
 
 ```bash
-cargo add poli-page@0.10 serde_json
+cargo add poli-page@0.13 serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-`poli-page@0.10` and a `"0.10"` requirement never pick a prerelease. No
+`poli-page@0.13` and a `"0.13"` requirement never pick a prerelease. No
 prerelease has been published yet. Once one is on crates.io (a version such
 as `X.Y.Z-rc.1`, see [CONTRIBUTING.md](CONTRIBUTING.md#stable-vs-prerelease)),
 pin it exactly: `cargo add poli-page@X.Y.Z-rc.1`.
@@ -151,7 +151,7 @@ For sync callers (short scripts, CLI tools, callers from a non-async host), opt 
 
 ```toml
 [dependencies]
-poli-page = { version = "0.11", features = ["blocking"] }
+poli-page = { version = "0.13", features = ["blocking"] }
 ```
 
 ```rust,no_run

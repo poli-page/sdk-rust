@@ -4,6 +4,77 @@ This document records breaking changes between versions of `poli-page`
 and the upgrade path for downstream code. Before `1.0.0`, a breaking
 change bumps the minor version (`0.(x+1).0`), per Cargo's 0.x semver rules.
 
+## From 0.11.0 to 0.13.0
+
+The crate now shares its major.minor with the Poli Page API, so there is no
+0.12. This release follows the API contract v0.13.0. Update the requirement
+to `poli-page = "0.13"`.
+
+### A 2xx body that is not JSON is `invalid_response`
+
+A 2xx answer whose body is not JSON (an HTML page from a proxy or a captive
+portal) was `Error::Internal` with the code `INTERNAL_ERROR`. It is now
+`Error::InvalidResponse`, code `invalid_response`, message
+`Invalid response: HTTP <status> body is not JSON`, with the real 2xx in
+`status()` and the `X-Request-Id` in `request_id()`. It is not retried. A
+JSON body of an unexpected shape is still `INTERNAL_ERROR`.
+
+```rust,ignore
+// 0.11.0
+Err(Error::Internal { .. }) => report_bad_gateway(),
+
+// 0.13.0
+Err(Error::InvalidResponse { status, request_id, .. }) => report_bad_gateway(),
+Err(Error::Internal { .. }) => report_bug(),
+```
+
+`to_payload()` answers 502 for it, so an integration that returns the payload
+never answers an error with a 2xx. `Error::status()` keeps the 2xx.
+
+### `render_to_file` write failures are `io_error`
+
+A file `render_to_file` cannot write (a parent directory it cannot create, a
+directory it cannot write to, a target it cannot replace) was
+`Error::InvalidOptions` with a message such as `failed to create file …`. It
+is now `Error::Io`, code `io_error`, message
+`Failed to write PDF: <the std::io::Error's text>`, with the
+`std::io::Error` as `source()` and no status. Match `Error::Io { source }`,
+or `err.code() == "io_error"`, where you matched `InvalidOptions` from
+`render_to_file`.
+
+### `render_to_file` replaces the target only once the PDF is complete
+
+The PDF is written to `.<name>.<random>.part` in the target's directory and
+renamed over the target at the end. A failed call leaves an existing target
+as it was and creates no file; it used to truncate it. Because the target is
+replaced, not rewritten:
+
+- its permissions, owner and hard links are not kept (the new file gets the
+  default permissions for a new file);
+- a symbolic link at the target path is replaced by the file, not followed;
+- the directory must allow creating a file, not only writing the target;
+- a process killed mid-download can leave a `.part` file behind.
+
+### The download is bounded by `timeout`
+
+The presigned-URL download now honours the client's `timeout` (60 s by
+default, or the input's `timeout`):
+
+- `render.pdf` and `download_pdf()`: the whole download. A PDF that takes
+  longer than `timeout` to download now fails with `DOWNLOAD_FAILED`,
+  `Failed to download PDF: timeout`. Raise `timeout`, or use
+  `render.pdf_stream` / `render_to_file`.
+- `render.pdf_stream` and `render_to_file`: the wait for the first byte and
+  each gap between two chunks. Reading the stream slowly is fine; a storage
+  that stops sending for `timeout` fails the stream with the same error.
+
+The error has no status and is never retryable, like every `DOWNLOAD_FAILED`.
+
+### `on_error` fires for an undecodable 2xx body
+
+`on_error` now fires once when a 2xx body cannot be decoded
+(`invalid_response`, or `INTERNAL_ERROR` for JSON of an unexpected shape).
+
 ## From 0.10.0 to 0.11.0
 
 The SDK now follows the retry policy and the error messages of the Poli Page
