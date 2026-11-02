@@ -234,3 +234,87 @@ fn blocking_builder_accepts_on_response_setter() {
     let _ = client.render.document(input()).expect("document");
     assert_eq!(count.load(Ordering::SeqCst), 1, "fired once on success");
 }
+
+// ---------------------------------------------------------------------------
+// The download's timeout and io_error, through the blocking client
+// ---------------------------------------------------------------------------
+
+/// A server whose presigned URL answers only after `delay`.
+fn slow_storage(delay: Duration) -> (MockServer, tokio::runtime::Runtime) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let server = rt.block_on(async {
+        let server = MockServer::start().await;
+        let presigned = format!("{}/presigned/slow.pdf", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1/render"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/presigned/slow.pdf"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(PDF_STUB)
+                    .set_delay(delay),
+            )
+            .mount(&server)
+            .await;
+        server
+    });
+    (server, rt)
+}
+
+fn quick_client(uri: String, timeout: Duration) -> BlockingPoliPage {
+    BlockingPoliPage::builder()
+        .api_key("pp_sandbox_x")
+        .base_url(uri)
+        .max_retries(0)
+        .timeout(timeout)
+        .build()
+        .unwrap()
+}
+
+#[test]
+fn blocking_render_to_file_times_out_and_keeps_the_target() {
+    let (server, _rt) = slow_storage(Duration::from_secs(5));
+    let client = quick_client(server.uri(), Duration::from_millis(300));
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    std::fs::write(&target, b"the previous PDF").unwrap();
+    let err = poli_page::blocking::render_to_file(&client, input(), &target).expect_err("timeout");
+    assert_eq!(err.code(), "DOWNLOAD_FAILED", "{err:?}");
+    assert_eq!(err.message(), "Failed to download PDF: timeout");
+    assert_eq!(err.status(), None);
+    assert!(!err.is_retryable());
+    assert_eq!(std::fs::read(&target).unwrap(), b"the previous PDF");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn blocking_pdf_times_out_on_the_download() {
+    let (server, _rt) = slow_storage(Duration::from_secs(5));
+    let client = quick_client(server.uri(), Duration::from_millis(300));
+    let err = client.render.pdf(input()).expect_err("timeout");
+    assert_eq!(err.message(), "Failed to download PDF: timeout");
+}
+
+#[test]
+fn blocking_render_to_file_is_io_error_when_the_target_is_a_directory() {
+    let (server, _rt) = mock_server();
+    let client = client(server.uri());
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("keep.txt"), b"kept").unwrap();
+    let err = poli_page::blocking::render_to_file(&client, input(), &target)
+        .expect_err("target is a directory");
+    assert_eq!(err.code(), "io_error", "{err:?}");
+    assert!(err.message().starts_with("Failed to write PDF: "), "{err}");
+    assert_eq!(err.status(), None);
+    assert!(std::error::Error::source(&err).is_some());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    assert_eq!(std::fs::read(target.join("keep.txt")).unwrap(), b"kept");
+}

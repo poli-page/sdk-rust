@@ -1,6 +1,8 @@
 //! Transport behaviour the contract cases cannot pin down: no hidden resend
-//! on a reused connection, the per-attempt timeout as an upper bound, and
-//! answers whose body breaks while it is read.
+//! on a reused connection, the per-attempt timeout as an upper bound,
+//! answers whose body breaks while it is read, and the timeout of the
+//! presigned-URL download (a total for `render.pdf` and `download_pdf`, an
+//! idle timeout for `render.pdf_stream`).
 //!
 //! Each test runs a small scripted HTTP/1.1 server on `127.0.0.1:0` that
 //! answers the n-th request with the n-th action and records which TCP
@@ -42,6 +44,13 @@ enum Act {
         declared: usize,
         sent: Vec<u8>,
         drip: bool,
+    },
+    /// The head with `content-length: declared` at once, then each piece
+    /// after its delay. A body that reaches `declared` keeps the connection
+    /// alive; a shorter one then hangs.
+    Trickle {
+        declared: usize,
+        pieces: Vec<(Duration, Vec<u8>)>,
     },
 }
 
@@ -162,6 +171,23 @@ async fn serve(
                     }
                 }
                 std::future::pending::<()>().await;
+            }
+            Act::Trickle { declared, pieces } => {
+                let head = head(200, &[("content-type", "application/pdf".into())], declared);
+                if stream.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                let mut sent = 0;
+                for (delay, piece) in pieces {
+                    tokio::time::sleep(delay).await;
+                    if stream.write_all(&piece).await.is_err() {
+                        return;
+                    }
+                    sent += piece.len();
+                }
+                if sent < declared {
+                    std::future::pending::<()>().await;
+                }
             }
         }
     }
@@ -564,4 +590,252 @@ async fn pdf_stream_body_cut_off_is_download_failed_network_error() {
     assert_eq!(err.message(), "Failed to download PDF: network error");
     assert_eq!(err.status(), None);
     assert!(err.source().is_some());
+}
+
+// ---------------------------------------------------------------------------
+// The download's timeout
+// ---------------------------------------------------------------------------
+
+/// The client's timeout in these tests: far above the gaps of a trickle, so
+/// a slow runner does not turn a gap into a timeout.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_millis(400);
+
+/// `count` pieces of `size` bytes, each `gap` after the previous one.
+fn trickle(count: usize, size: usize, gap: Duration) -> Act {
+    Act::Trickle {
+        declared: count * size,
+        pieces: (0..count)
+            .map(|i| (gap, vec![b'a' + (i % 26) as u8; size]))
+            .collect(),
+    }
+}
+
+/// The whole body of `trickle(count, size, _)`.
+fn trickled(count: usize, size: usize) -> Vec<u8> {
+    (0..count)
+        .flat_map(|i| vec![b'a' + (i % 26) as u8; size])
+        .collect()
+}
+
+/// A body whose gaps each stay far under `DOWNLOAD_TIMEOUT` but which takes
+/// more than twice as long in all.
+fn slow_body() -> Act {
+    trickle(20, 16, Duration::from_millis(50))
+}
+
+fn assert_download_timeout(err: &Error) {
+    assert_eq!(err.code(), "DOWNLOAD_FAILED", "{err:?}");
+    assert_eq!(err.message(), "Failed to download PDF: timeout");
+    assert_eq!(err.to_string(), "Failed to download PDF: timeout");
+    assert_eq!(err.status(), None);
+    assert_eq!(err.request_id(), None);
+    assert!(!err.is_retryable());
+    assert!(!err.is_network_error());
+    assert!(err.source().is_some());
+}
+
+async fn pdf_storage(act: Act) -> Server {
+    Server::start_with(|origin| vec![ok_descriptor(&storage_url(origin)), act]).await
+}
+
+/// Reads the stream to its end: the bytes, then the error that ended it.
+async fn drain(mut stream: poli_page::client::PdfByteStream) -> (Vec<u8>, Option<Error>) {
+    let mut data = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => data.extend_from_slice(&bytes),
+            Err(e) => {
+                // The stream ends after its error.
+                assert!(stream.next().await.is_none(), "the stream ended");
+                return (data, Some(e));
+            }
+        }
+    }
+    (data, None)
+}
+
+#[tokio::test]
+async fn render_pdf_download_that_never_answers_is_download_failed_timeout() {
+    let server = pdf_storage(Act::Hang).await;
+    let (client, attempts) = client(&server.origin, 2, DOWNLOAD_TIMEOUT);
+    let (result, elapsed) = bounded("download hang", client.render.pdf(input())).await;
+    assert_download_timeout(&result.expect_err("timeout"));
+    assert!(elapsed >= DOWNLOAD_TIMEOUT, "{elapsed:?}");
+    // One render, one download: neither is retried.
+    assert_eq!(server.seen().len(), 2);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn render_pdf_timeout_bounds_the_whole_download() {
+    let server = pdf_storage(slow_body()).await;
+    let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+    let (result, _) = bounded("slow download", client.render.pdf(input())).await;
+    assert_download_timeout(&result.expect_err("timeout"));
+}
+
+#[tokio::test]
+async fn render_pdf_input_timeout_bounds_the_download_too() {
+    let server = pdf_storage(Act::Hang).await;
+    let (client, _) = client(&server.origin, 0, Duration::from_secs(30));
+    let input = RenderInput {
+        timeout: Some(DOWNLOAD_TIMEOUT),
+        ..input()
+    };
+    let (result, _) = bounded("download hang", client.render.pdf(input)).await;
+    assert_download_timeout(&result.expect_err("timeout"));
+}
+
+#[tokio::test]
+async fn download_pdf_timeout_bounds_the_whole_download() {
+    for act in [Act::Hang, slow_body()] {
+        let server = pdf_storage(act).await;
+        let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+        let doc = client.render.document(input()).await.expect("document");
+        let (result, _) = bounded("slow download", doc.download_pdf()).await;
+        assert_download_timeout(&result.expect_err("timeout"));
+    }
+}
+
+#[tokio::test]
+async fn control_a_body_within_the_timeout_downloads_in_full() {
+    let server = pdf_storage(trickle(4, 16, Duration::from_millis(20))).await;
+    let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+    let pdf = client.render.pdf(input()).await.expect("pdf");
+    assert_eq!(pdf.as_ref(), trickled(4, 16).as_slice());
+}
+
+#[tokio::test]
+async fn pdf_stream_timeout_is_an_idle_timeout_not_a_total() {
+    let server = pdf_storage(slow_body()).await;
+    let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+    let ((data, failure), elapsed) = bounded("slow stream", async {
+        drain(client.render.pdf_stream(input()).await.expect("stream")).await
+    })
+    .await;
+    assert!(failure.is_none(), "{failure:?}");
+    assert_eq!(data, trickled(20, 16));
+    // Control: the download did last longer than the timeout.
+    assert!(elapsed > DOWNLOAD_TIMEOUT, "{elapsed:?}");
+}
+
+#[tokio::test]
+async fn pdf_stream_that_gets_no_answer_fails_before_returning_the_stream() {
+    let server = pdf_storage(Act::Hang).await;
+    let (client, _) = client(&server.origin, 2, DOWNLOAD_TIMEOUT);
+    let (result, elapsed) = bounded("stream hang", client.render.pdf_stream(input())).await;
+    assert_download_timeout(&result.expect_err("timeout"));
+    assert!(elapsed >= DOWNLOAD_TIMEOUT, "{elapsed:?}");
+    assert_eq!(server.seen().len(), 2);
+}
+
+#[tokio::test]
+async fn pdf_stream_waiting_for_its_first_byte_fails_with_timeout() {
+    let server = pdf_storage(Act::Trickle {
+        declared: 1000,
+        pieces: vec![],
+    })
+    .await;
+    let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+    let stream = client.render.pdf_stream(input()).await.expect("head");
+    let ((data, failure), elapsed) = bounded("first byte", drain(stream)).await;
+    assert!(data.is_empty());
+    assert_download_timeout(&failure.expect("timeout"));
+    assert!(elapsed >= DOWNLOAD_TIMEOUT, "{elapsed:?}");
+}
+
+#[tokio::test]
+async fn pdf_stream_stalled_mid_body_fails_with_timeout() {
+    let server = pdf_storage(Act::Trickle {
+        declared: 1000,
+        pieces: vec![
+            (Duration::ZERO, b"%PDF-".to_vec()),
+            (Duration::from_millis(20), b"1.4".to_vec()),
+        ],
+    })
+    .await;
+    let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+    let stream = client.render.pdf_stream(input()).await.expect("head");
+    let ((data, failure), _) = bounded("mid-body stall", drain(stream)).await;
+    assert_eq!(data, b"%PDF-1.4");
+    assert_download_timeout(&failure.expect("timeout"));
+}
+
+#[tokio::test]
+async fn a_timeout_of_an_injected_client_on_the_download_is_a_timeout() {
+    // reqwest's own timeout signal, not elapsed time: the SDK's bound is 30 s.
+    let server = pdf_storage(Act::Hang).await;
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_millis(200))
+        .build()
+        .expect("reqwest client");
+    let (client, _) = client_with(&server.origin, 0, Duration::from_secs(30), Some(http));
+    let (result, _) = bounded("download hang", client.render.pdf(input())).await;
+    assert_download_timeout(&result.expect_err("timeout"));
+}
+
+// ---------------------------------------------------------------------------
+// render_to_file never writes a partial PDF
+// ---------------------------------------------------------------------------
+
+/// The names in `dir`, sorted.
+fn listing(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("read dir")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn render_to_file_keeps_the_target_when_the_download_ends_short() {
+    let server = pdf_storage(cut_pdf()).await;
+    let (client, _) = client(&server.origin, 0, Duration::from_secs(2));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("out.pdf");
+    std::fs::write(&target, b"the previous PDF").expect("seed target");
+    let err = poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect_err("short body");
+    assert_eq!(err.code(), "DOWNLOAD_FAILED", "{err:?}");
+    assert_eq!(err.message(), "Failed to download PDF: network error");
+    assert_eq!(std::fs::read(&target).expect("target"), b"the previous PDF");
+    assert_eq!(listing(dir.path()), ["out.pdf"], "no temporary file left");
+}
+
+#[tokio::test]
+async fn render_to_file_creates_no_file_when_the_download_stalls() {
+    let server = pdf_storage(Act::Trickle {
+        declared: 1000,
+        pieces: vec![(Duration::ZERO, b"%PDF-1.4".to_vec())],
+    })
+    .await;
+    let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("out.pdf");
+    let (result, _) = bounded(
+        "stalled download",
+        poli_page::render_to_file(&client, input(), &target),
+    )
+    .await;
+    assert_download_timeout(&result.expect_err("timeout"));
+    assert!(listing(dir.path()).is_empty(), "{:?}", listing(dir.path()));
+}
+
+#[tokio::test]
+async fn render_to_file_dropped_mid_download_leaves_no_temporary_file() {
+    let server = pdf_storage(Act::Trickle {
+        declared: 1000,
+        pieces: vec![(Duration::ZERO, b"%PDF-1.4".to_vec())],
+    })
+    .await;
+    let (client, _) = client(&server.origin, 0, Duration::from_secs(30));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("out.pdf");
+    let call = poli_page::render_to_file(&client, input(), &target);
+    // The caller gives up: dropping the future cancels the call.
+    let gave_up = tokio::time::timeout(Duration::from_millis(300), call).await;
+    assert!(gave_up.is_err(), "the call was still running");
+    assert!(listing(dir.path()).is_empty(), "{:?}", listing(dir.path()));
 }

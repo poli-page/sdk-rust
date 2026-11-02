@@ -1,6 +1,4 @@
 //! `render_to_file` — render a PDF and stream it to disk in bounded memory.
-//!
-//! Behavior parity with Node SDK's `renderToFile`; spec §11.
 
 use std::future::poll_fn;
 use std::path::Path;
@@ -9,22 +7,33 @@ use std::pin::Pin;
 use futures_core::Stream;
 use tokio::io::AsyncWriteExt;
 
+use crate::internal::part_file::{io_error, parent_dir, part_path, PartGuard};
 use crate::{Error, PoliPage, RenderInput};
 
 /// Render a PDF and stream the bytes to the given path.
 ///
-/// Creates parent directories if missing. Overwrites existing files. Uses
-/// bounded memory regardless of PDF size — chunks are written as they arrive
-/// from the deployed API via [`crate::Render::pdf_stream`].
+/// Creates parent directories if missing. Uses bounded memory regardless of
+/// PDF size — chunks are written as they arrive from the deployed API via
+/// [`crate::Render::pdf_stream`], whose idle timeout applies.
+///
+/// The PDF is written to a temporary file next to the target
+/// (`.<name>.<random>.part`), which is renamed over the target only once the
+/// PDF is complete: a call that fails leaves the target as it was (an
+/// existing file keeps its content, a missing one is not created) and
+/// removes the temporary file. The rename replaces the target file itself:
+/// its permissions, owner and hard links are not kept, and a symbolic link
+/// is replaced, not followed. The temporary file is created before the
+/// render, so a path that cannot be written costs no render.
 ///
 /// `path` accepts anything that implements [`AsRef<Path>`] — `&str`, `&Path`,
 /// `PathBuf`, etc.
 ///
 /// # Errors
 ///
-/// - [`Error::InvalidOptions`] for filesystem failures (couldn't create the
-///   parent directory, couldn't open the file for writing, write failed,
-///   flush failed).
+/// - [`Error::Io`] (`io_error`, `Failed to write PDF: <reason>`, no status,
+///   never retried) when the file cannot be written: creating a parent
+///   directory, creating or writing the temporary file, or renaming it over
+///   the target. The I/O error is the `source()`.
 /// - Any error variant [`crate::Render::pdf_stream`] returns: the first-hop
 ///   `POST /v1/render` family, or a [`Error::Download`] on the second-hop
 ///   presigned-URL fetch.
@@ -54,40 +63,37 @@ pub async fn render_to_file(
     input: RenderInput,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
-    let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        // `parent` is `""` when the path has no directory component; skip the
-        // create_dir_all call so we don't tell tokio to create `""`.
-        if !parent.as_os_str().is_empty() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| Error::InvalidOptions {
-                    message: format!("failed to create directory {}: {}", parent.display(), e),
-                })?;
-        }
+    let target = path.as_ref();
+    if let Some(parent) = parent_dir(target) {
+        tokio::fs::create_dir_all(parent).await.map_err(io_error)?;
     }
+    let part_path = part_path(target).map_err(io_error)?;
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part_path)
+        .await
+        .map_err(io_error)?;
+    // Removes the temporary file on every early return (and if this future
+    // is dropped). Rust opens files with delete sharing on Windows, so the
+    // removal works while `file` is still open.
+    let part = PartGuard::new(part_path);
 
     let stream = client.render.pdf_stream(input).await?;
     let mut stream = std::pin::pin!(stream);
-    let mut file = tokio::fs::File::create(path)
-        .await
-        .map_err(|e| Error::InvalidOptions {
-            message: format!("failed to create file {}: {}", path.display(), e),
-        })?;
-
     // Consume the stream chunk-by-chunk via std::future::poll_fn so we don't
-    // need to depend on `futures_util::StreamExt` (it's dev-only per §5.1).
+    // need to depend on `futures_util::StreamExt` (it's a dev-dependency).
     while let Some(chunk) = poll_fn(|cx| poll_next_pin(&mut stream, cx)).await {
         let chunk = chunk?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| Error::InvalidOptions {
-                message: format!("failed to write to {}: {}", path.display(), e),
-            })?;
+        file.write_all(&chunk).await.map_err(io_error)?;
     }
-    file.flush().await.map_err(|e| Error::InvalidOptions {
-        message: format!("failed to flush {}: {}", path.display(), e),
-    })?;
+    file.flush().await.map_err(io_error)?;
+    // Wait for every write and close the file before the rename.
+    drop(file.into_std().await);
+    tokio::fs::rename(part.path(), target)
+        .await
+        .map_err(io_error)?;
+    part.disarm();
     Ok(())
 }
 

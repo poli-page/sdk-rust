@@ -32,13 +32,15 @@ impl Render {
     /// Render a PDF and return it as raw bytes. Two HTTP calls under the
     /// hood: `POST /v1/render` to produce a stored document, then `GET`
     /// against the descriptor's `presigned_pdf_url` to fetch the bytes.
-    /// The second call is unauthenticated and not retried (spec §5.5).
+    /// The second call is unauthenticated and not retried. The timeout (the
+    /// input's, else the client's) bounds the whole download, body included.
     ///
     /// # Errors
     ///
     /// Same `Error::*` shape as [`Self::document`] for the first hop;
-    /// second-hop failures (presigned URL expired, S3 unreachable, etc.)
-    /// surface as [`Error::Download`].
+    /// second-hop failures (presigned URL expired, S3 unreachable, a
+    /// download that outlasts the timeout, etc.) surface as
+    /// [`Error::Download`].
     ///
     /// # Example
     ///
@@ -64,8 +66,11 @@ impl Render {
     /// # Ok(()) }
     /// ```
     pub async fn pdf(&self, input: RenderInput) -> Result<Bytes, Error> {
+        let timeout = self.download_timeout(&input);
         let descriptor = self.document(input).await?;
-        descriptor.download_pdf().await
+        self.inner
+            .fetch_bytes(&descriptor.presigned_pdf_url, timeout)
+            .await
     }
 
     /// Render a PDF and return a streaming view of its bytes. Identical wire
@@ -75,6 +80,11 @@ impl Render {
     /// HTTP response, an S3 upload, or a file without wanting the whole PDF
     /// in memory at once.
     ///
+    /// The timeout (the input's, else the client's) bounds the wait for the
+    /// download's first byte and each gap between two chunks, not the total,
+    /// so a large PDF read at the caller's pace is not cut off. Past it, the
+    /// stream yields `DOWNLOAD_FAILED` (`Failed to download PDF: timeout`).
+    ///
     /// The returned [`PdfByteStream`] implements
     /// `futures_core::Stream<Item = Result<Bytes, Error>>`. Consume it with
     /// `futures::StreamExt` (or a `while let Some(chunk) = stream.next()`
@@ -83,9 +93,9 @@ impl Render {
     /// # Errors
     ///
     /// First-hop errors mirror [`Self::document`]. Second-hop *header* errors
-    /// (non-2xx, network) surface synchronously here as [`Error::Download`];
-    /// chunk-level errors mid-stream surface as `Err` items inside the
-    /// stream itself.
+    /// (non-2xx, network, timeout) surface synchronously here as
+    /// [`Error::Download`]; chunk-level errors mid-stream (a broken body, an
+    /// idle timeout) surface as `Err` items inside the stream itself.
     ///
     /// # Example
     ///
@@ -111,8 +121,16 @@ impl Render {
     /// # Ok(()) }
     /// ```
     pub async fn pdf_stream(&self, input: RenderInput) -> Result<PdfByteStream, Error> {
+        let timeout = self.download_timeout(&input);
         let descriptor = self.document(input).await?;
-        self.inner.stream_bytes(&descriptor.presigned_pdf_url).await
+        self.inner
+            .stream_bytes(&descriptor.presigned_pdf_url, timeout)
+            .await
+    }
+
+    /// The download's bound: the same value as the render's API attempts.
+    fn download_timeout(&self, input: &RenderInput) -> Duration {
+        input.timeout.unwrap_or(self.inner.config.timeout)
     }
 
     /// Render a PDF, store it server-side, and return a flat document
@@ -133,7 +151,9 @@ impl Render {
     /// - [`Error::RateLimited`] when the tenant exceeds its quota.
     /// - [`Error::Api`] for any other 4xx/5xx after retries are exhausted —
     ///   e.g. `503 PUBLISH_IN_PROGRESS` while a publish holds the project.
-    /// - [`Error::Internal`] when the response body fails to parse as a
+    /// - [`Error::InvalidResponse`] when a 2xx answer's body is not JSON
+    ///   (`invalid_response`, not retried).
+    /// - [`Error::Internal`] when the response body is JSON but not a
     ///   `DocumentDescriptor`.
     ///
     /// # Example
@@ -195,8 +215,5 @@ where
         timeout: timeout_override,
     };
     let resp = inner.execute(attempt).await?;
-    serde_json::from_slice::<T>(&resp.body).map_err(|e| Error::Internal {
-        message: format!("could not parse response body as JSON: {e}"),
-        status: Some(resp.status),
-    })
+    inner.decode_json(&resp, "response body")
 }

@@ -3,6 +3,7 @@
 //! Ports the orchestration in Node `src/index.ts:69-260` (`PoliPage` class,
 //! `#runWithRetry`, `#sendOnce`, `#fireHook`).
 
+use std::future::Future;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -95,6 +96,15 @@ pub(crate) struct ParsedResponse {
     pub body: Bytes,
 }
 
+impl ParsedResponse {
+    fn request_id(&self) -> Option<String> {
+        self.headers
+            .get(HEADER_REQUEST_ID)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    }
+}
+
 impl ClientInner {
     /// Run an HTTP attempt through the retry loop.
     ///
@@ -143,29 +153,82 @@ impl ClientInner {
         Err(err)
     }
 
+    /// Decode a 2xx answer that must be JSON into `T`.
+    ///
+    /// A body that is not JSON at all is [`Error::InvalidResponse`], with the
+    /// real status and request id: something other than the API answered.
+    /// JSON of an unexpected shape stays [`Error::Internal`]. Neither is
+    /// retried; `on_error` fires once with the error.
+    pub(crate) fn decode_json<T: serde::de::DeserializeOwned>(
+        &self,
+        resp: &ParsedResponse,
+        what: &str,
+    ) -> Result<T, Error> {
+        let shape_error = match serde_json::from_slice::<T>(&resp.body) {
+            Ok(value) => return Ok(value),
+            Err(e) => e,
+        };
+        // A type error can come before a syntax error further on, so the
+        // whole body is checked for JSON on its own.
+        let err = match serde_json::from_slice::<serde::de::IgnoredAny>(&resp.body) {
+            Err(not_json) => Error::InvalidResponse {
+                status: resp.status,
+                request_id: resp.request_id(),
+                source: Some(Box::new(not_json)),
+            },
+            Ok(_) => Error::Internal {
+                message: format!("unexpected {what}: {shape_error}"),
+                status: Some(resp.status),
+            },
+        };
+        warn!(status = resp.status, code = err.code(), "unusable 2xx body");
+        fire_error_hook(self.on_error.as_ref(), &err);
+        Err(err)
+    }
+
     /// Fetch the bytes at a presigned URL. Unauthenticated, single attempt,
-    /// no retries — per spec §9.1 the second-hop storage fetch sits outside
-    /// the SDK's retry policy.
+    /// no retries: the second-hop storage fetch sits outside the SDK's retry
+    /// policy. `timeout` bounds the whole download, body included.
     ///
     /// Errors map to [`Error::Download`]: `Failed to download PDF: HTTP
     /// <status>` for a non-2xx answer, `Failed to download PDF: network
     /// error` (the transport error as `source`) when the storage does not
-    /// answer or the body fails while it is read.
-    pub(crate) async fn fetch_bytes(&self, url: &str) -> Result<Bytes, Error> {
-        let response = self.start_download(url).await?;
-        response.bytes().await.map_err(download_network_error)
+    /// answer or the body fails while it is read (a body that ends short of
+    /// its `Content-Length` included), `Failed to download PDF: timeout`
+    /// when the download outlasts `timeout`.
+    pub(crate) async fn fetch_bytes(&self, url: &str, timeout: Duration) -> Result<Bytes, Error> {
+        let download = async {
+            let response = self.start_download(url).await?;
+            response.bytes().await.map_err(download_transport_error)
+        };
+        match tokio::time::timeout(timeout, download).await {
+            Ok(result) => result,
+            Err(elapsed) => Err(download_timeout(Box::new(elapsed))),
+        }
     }
 
     /// Stream the bytes at a presigned URL chunk-by-chunk. Same auth/retry
-    /// posture as [`fetch_bytes`].
+    /// posture as [`fetch_bytes`](Self::fetch_bytes), but `timeout` is an
+    /// idle timeout: it bounds the wait for the answer's head, then the wait
+    /// for each chunk, not the total, so a large PDF read at the caller's
+    /// pace is not cut off.
     ///
     /// Returns once the response headers arrive (so non-2xx is reported
     /// before any bytes are read); subsequent reads on the returned stream
     /// surface chunk-level errors as [`Error::Download`].
-    pub(crate) async fn stream_bytes(&self, url: &str) -> Result<PdfByteStream, Error> {
-        let response = self.start_download(url).await?;
+    pub(crate) async fn stream_bytes(
+        &self,
+        url: &str,
+        timeout: Duration,
+    ) -> Result<PdfByteStream, Error> {
+        let response = match tokio::time::timeout(timeout, self.start_download(url)).await {
+            Ok(result) => result?,
+            Err(elapsed) => return Err(download_timeout(Box::new(elapsed))),
+        };
         Ok(PdfByteStream {
-            inner: Box::pin(response.bytes_stream()),
+            inner: Some(Box::pin(response.bytes_stream())),
+            idle: Box::pin(tokio::time::sleep_until(idle_deadline(timeout))),
+            timeout,
         })
     }
 
@@ -175,7 +238,7 @@ impl ClientInner {
             .get(url)
             .send()
             .await
-            .map_err(download_network_error)?;
+            .map_err(download_transport_error)?;
         let status = response.status().as_u16();
         if !response.status().is_success() {
             return Err(Error::Download {
@@ -190,8 +253,12 @@ impl ClientInner {
 
 /// A presigned-URL download that got no answer, or whose body failed while
 /// it was read: `DOWNLOAD_FAILED` without a status, the transport error as
-/// `source`.
-fn download_network_error(err: reqwest::Error) -> Error {
+/// `source`. When that error is a timeout of an injected `reqwest::Client`,
+/// the download did outlast a timeout: it says so.
+fn download_transport_error(err: reqwest::Error) -> Error {
+    if err.is_timeout() {
+        return download_timeout(Box::new(err));
+    }
     Error::Download {
         message: "Failed to download PDF: network error".to_owned(),
         status: None,
@@ -199,16 +266,51 @@ fn download_network_error(err: reqwest::Error) -> Error {
     }
 }
 
-/// Adapter that maps a reqwest byte stream's errors into our
-/// [`Error::Download`] variant — `futures_core::Stream` only, so consumers
-/// pull in `futures::StreamExt` (or hand-implement) to consume it.
+/// A presigned-URL download that outlasted its timeout: `DOWNLOAD_FAILED`
+/// without a status, never retried.
+fn download_timeout(source: Box<dyn std::error::Error + Send + Sync>) -> Error {
+    Error::Download {
+        message: "Failed to download PDF: timeout".to_owned(),
+        status: None,
+        source: Some(source),
+    }
+}
+
+/// `now + timeout`, or a deadline about 30 years away when that overflows
+/// (a timeout of `Duration::MAX` waits for ever, as `tokio::time::timeout`
+/// does).
+fn idle_deadline(timeout: Duration) -> tokio::time::Instant {
+    let now = tokio::time::Instant::now();
+    now.checked_add(timeout)
+        .unwrap_or_else(|| now + Duration::from_secs(86_400 * 365 * 30))
+}
+
+/// The download's body as reqwest streams it.
+type ReqwestByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
+
+/// The PDF of [`crate::Render::pdf_stream`], chunk by chunk. Transport
+/// errors become [`Error::Download`] items — `futures_core::Stream` only, so
+/// consumers pull in `futures::StreamExt` (or hand-implement) to consume it.
+///
+/// The client's `timeout` bounds the wait for each chunk (an idle timeout,
+/// not a total): past it, the stream yields `DOWNLOAD_FAILED` with the
+/// message `Failed to download PDF: timeout`, then ends. A body that ends
+/// short of its `Content-Length` yields `Failed to download PDF: network
+/// error`.
 pub struct PdfByteStream {
-    inner: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+    /// `None` once the stream has failed on its idle timeout: the
+    /// connection is dropped and the stream ends.
+    inner: Option<ReqwestByteStream>,
+    /// Fires when no chunk arrived for `timeout`; reset by every chunk.
+    idle: Pin<Box<tokio::time::Sleep>>,
+    timeout: Duration,
 }
 
 impl std::fmt::Debug for PdfByteStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PdfByteStream").finish_non_exhaustive()
+        f.debug_struct("PdfByteStream")
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
     }
 }
 
@@ -216,11 +318,29 @@ impl Stream for PdfByteStream {
     type Item = Result<Bytes, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.inner.as_mut().poll_next(cx) {
-            Poll::Pending => Poll::Pending,
+        let this = &mut *self;
+        let Some(inner) = this.inner.as_mut() else {
+            return Poll::Ready(None);
+        };
+        // The body first: a chunk that is ready wins over a timer that
+        // fired at the same time.
+        match inner.as_mut().poll_next(cx) {
             Poll::Ready(None) => Poll::Ready(None),
-            Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(bytes))),
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(download_network_error(e)))),
+            Poll::Ready(Some(Ok(bytes))) => {
+                let deadline = idle_deadline(this.timeout);
+                this.idle.as_mut().reset(deadline);
+                Poll::Ready(Some(Ok(bytes)))
+            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(download_transport_error(e)))),
+            Poll::Pending => match this.idle.as_mut().poll(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(()) => {
+                    this.inner = None;
+                    Poll::Ready(Some(Err(download_timeout(
+                        format!("no data for {}ms", this.timeout.as_millis()).into(),
+                    ))))
+                }
+            },
         }
     }
 }
@@ -664,7 +784,13 @@ impl PoliPageBuilder {
 
     /// Override the per-attempt timeout. Defaults to 60 seconds. Note: this is
     /// PER ATTEMPT — `max_retries * timeout + sleeps` is the worst-case
-    /// wall-clock for a single call.
+    /// wall-clock for the API part of a call.
+    ///
+    /// The same value bounds the presigned-URL download: the whole download
+    /// for `render.pdf` and [`crate::DocumentDescriptor::download_pdf`], the
+    /// wait for each chunk (an idle timeout) for `render.pdf_stream` and
+    /// [`crate::render_to_file`]. Past it, the call fails with
+    /// `DOWNLOAD_FAILED` (`Failed to download PDF: timeout`), not retried.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);

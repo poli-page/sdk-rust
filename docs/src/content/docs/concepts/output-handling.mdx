@@ -28,6 +28,8 @@ let mut stream = std::pin::pin!(client.render.pdf_stream(input).await?);
 // Consume with `StreamExt::next` or `poll_fn`.
 ```
 
+The client's `timeout` bounds the stream as an idle timeout: the wait for the first byte and each gap between two chunks, not the total, so a large PDF read at your own pace is not cut off. Past it, the stream yields `DOWNLOAD_FAILED` (`Failed to download PDF: timeout`) and ends. `render.pdf` and `download_pdf()` bound the whole download instead.
+
 ## Write to file (`render_to_file`)
 
 The free-standing helper streams bytes directly to disk with bounded memory. Parent directories are created automatically:
@@ -35,6 +37,8 @@ The free-standing helper streams bytes directly to disk with bounded memory. Par
 ```rust
 poli_page::render_to_file(&client, input, "./out.pdf").await?;
 ```
+
+The PDF goes to a temporary file next to the target (`.<name>.<random>.part`), renamed over the target once it is complete. A failed call (a render error, a broken or timed-out download, a write error) leaves an existing file as it was and creates no file; the temporary file is removed, unless the process is killed. The rename replaces the target file itself: its permissions, owner and hard links are not kept, and a symbolic link is replaced, not followed. A file that cannot be written is `io_error` (`Failed to write PDF: <reason>`), with the `std::io::Error` as `source()`; the temporary file is created before the render, so an unwritable path costs no render.
 
 ## Server-side storage (`render.document`)
 

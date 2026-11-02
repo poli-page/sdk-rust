@@ -94,7 +94,7 @@ poli_page::render_to_file(
 # Ok(()) }
 ```
 
-`render_to_file` streams response bytes directly to disk (bounded memory). It creates parent directories if missing and overwrites existing files.
+`render_to_file` streams response bytes directly to disk (bounded memory). It creates parent directories if missing and writes to a temporary file next to the target (`.<name>.<random>.part`), renamed over the target once the PDF is complete: a failed call leaves an existing file as it was and creates no file. The rename replaces the target file itself (its permissions, owner and hard links are not kept, and a symbolic link is replaced, not followed). When the file cannot be written, the error is `io_error` (`Failed to write PDF: <reason>`, the `std::io::Error` as `source()`).
 
 #### Stream — for large PDFs or piping to S3 / HTTP responses
 
@@ -124,6 +124,8 @@ while let Some(chunk) = poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await 
 ```
 
 (Or `cargo add futures-util` and call `stream.next().await` if you'd rather not hand-roll `poll_fn`.)
+
+The client's `timeout` bounds the download as an idle timeout: the wait for the first byte and each gap between two chunks, not the total, so a large PDF read at your own pace is not cut off. `render.pdf` and `download_pdf()` bound the whole download instead. Past it, the error is `DOWNLOAD_FAILED` with `Failed to download PDF: timeout`.
 
 #### Try it locally — runnable demo
 
@@ -267,13 +269,13 @@ let client = PoliPage::builder()
 | `base_url` | `String` | `https://api.poli.page` | API base URL |
 | `max_retries` | `u32` | `2` | Max retry attempts on retryable errors |
 | `retry_delay` | `Duration` | 500 ms | Base delay before the first retry |
-| `timeout` | `Duration` | 60 s | Per-attempt timeout, body included |
+| `timeout` | `Duration` | 60 s | Per-attempt timeout, body included; also bounds the PDF download |
 | `on_retry` | `Fn(&RetryEvent) + Send + Sync` | — | Called before each retry sleep |
 | `on_error` | `Fn(&Error) + Send + Sync` | — | Called once per terminal failure |
 
 ## Error handling
 
-The SDK returns a single `Error` enum for every failure (API errors, network failures, timeouts, builder validation):
+The SDK returns a single `Error` enum for every failure (API errors, network failures, timeouts, download failures, invalid responses, file write failures, builder validation):
 
 ```rust,no_run
 use poli_page::{Error, PoliPage, RenderInput};
@@ -290,7 +292,9 @@ match client.render.pdf(input).await {
 # Ok(()) }
 ```
 
-Every API-error variant exposes `status()` (HTTP status), `code()` (the wire error code) and `request_id()` (the `X-Request-Id` header — invaluable for support). `message()` is the bare explanation: for SDK-side errors the exact text every Poli Page SDK uses (`apiKey is required`, `Network request failed`, `Request timed out after <ms>ms`, `Failed to download PDF: HTTP <status>`, …), which is also their `Display`. `to_payload()` returns all four, with the bare message, as one `ErrorPayload` (`status` and `requestId` are `null` when unknown). The predicates read the status: `is_auth_error()` is 401 or 403, `is_rate_limit_error()` 429, `is_validation_error()` 400.
+Every API-error variant exposes `status()` (HTTP status), `code()` (the wire error code) and `request_id()` (the `X-Request-Id` header — invaluable for support). `message()` is the bare explanation: for SDK-side errors the exact text every Poli Page SDK uses (`apiKey is required`, `Network request failed`, `Request timed out after <ms>ms`, `Failed to download PDF: HTTP <status>`, `Failed to download PDF: timeout`, `Invalid response: HTTP <status> body is not JSON`, `Failed to write PDF: <reason>`, …), which is also their `Display`. `to_payload()` returns all four, with the bare message, as one `ErrorPayload` with exactly the keys `code`, `message`, `status` and `requestId` (`status` and `requestId` are `null` when unknown; `status` is 503 for `network_error`, 504 for `timeout` and 502 for `invalid_response`).
+
+Two SDK codes come from outside the API: `invalid_response` is a 2xx answer whose body is not JSON where the method expects JSON (something between you and the API answered, such as a proxy or a captive portal); it keeps the real 2xx in `status()` and the `request_id()`. `io_error` is a file `render_to_file` could not write. Neither is retried. The predicates read the status: `is_auth_error()` is 401 or 403, `is_rate_limit_error()` 429, `is_validation_error()` 400.
 
 For not-found, lifecycle and billing failures, match the wire code directly:
 
@@ -354,7 +358,7 @@ Every request the server receives is one of the SDK's attempts: the SDK's own `r
 
 Every POST sends an auto-generated `Idempotency-Key` (UUID v4), the same on every retry of that call. The API does not deduplicate on it, so a render retried after a late 5xx, a `timeout` or a `network_error` can store a second document. Override the key per call via `RenderInput::idempotency_key`.
 
-The second-hop presigned-URL fetch (for `render.pdf` / `render.pdf_stream` / `DocumentDescriptor::download_pdf`) is **single-attempt** and **unauthenticated** — it carries its own signature and doesn't participate in the SDK's retry policy: its `DOWNLOAD_FAILED` is never retryable, whatever the storage status.
+The second-hop presigned-URL fetch (for `render.pdf` / `render.pdf_stream` / `DocumentDescriptor::download_pdf`) is **single-attempt** and **unauthenticated** — it carries its own signature and doesn't participate in the SDK's retry policy: its `DOWNLOAD_FAILED` is never retryable, whatever the storage status, a timeout included. `invalid_response` and `io_error` are never retried either.
 
 ## Type system
 

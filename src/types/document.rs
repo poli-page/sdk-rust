@@ -77,12 +77,13 @@ impl DocumentDescriptor {
     /// The fetch is **unauthenticated** (the presigned URL carries its own
     /// signature) and **not subject to the SDK's retry policy** — expired or
     /// already-downloaded URLs return immediately rather than waiting on
-    /// retry backoff.
+    /// retry backoff. The client's `timeout` bounds the whole download, body
+    /// included.
     ///
     /// # Errors
     ///
-    /// - [`Error::Download`] on non-2xx response or network failure from the
-    ///   presigned URL fetch.
+    /// - [`Error::Download`] on non-2xx response, network failure or timeout
+    ///   from the presigned URL fetch.
     /// - [`Error::InvalidOptions`] when the descriptor lacks a client
     ///   back-reference (only happens if the caller manually constructed a
     ///   `DocumentDescriptor` via deserialization instead of obtaining it
@@ -105,7 +106,9 @@ impl DocumentDescriptor {
                 (was it deserialized outside an SDK method?)"
                 .into(),
         })?;
-        client.fetch_bytes(&self.presigned_pdf_url).await
+        client
+            .fetch_bytes(&self.presigned_pdf_url, client.config.timeout)
+            .await
     }
 }
 
