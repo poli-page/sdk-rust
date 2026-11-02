@@ -44,7 +44,7 @@ cd "$(dirname "$0")/.."
 # ─── Pre-flight ──────────────────────────────────────────────────────────────
 step "Pre-flight"
 
-VERSION=$(awk -F\" '/^version =/ {print $2; exit}' Cargo.toml)
+VERSION=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)
 [[ -n "$VERSION" ]] || die "Could not read version from Cargo.toml"
 TAG="v$VERSION"
 ok "Version in Cargo.toml: $VERSION (tag would be $TAG)"
