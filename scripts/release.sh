@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Primary publishing path for the `poli-page` Rust SDK.
-# Spec §16.3 — local, manual, gated on a confirmation prompt.
+# Fallback publishing path for the `poli-page` Rust SDK: local, manual,
+# gated on a confirmation prompt (the Release workflow is the usual path).
 #
 # Usage:
 #   ./scripts/release.sh              # full release: verify, publish, tag, push
 #   ./scripts/release.sh --dry-run    # everything except cargo publish + git push tag
 #
 # Pre-flight asserts on `main`, clean working tree, target tag doesn't yet
-# exist on local OR remote, and that a crates.io login token is present in
-# the user's ~/.cargo/credentials.toml (or via CARGO_REGISTRY_TOKEN).
+# exist on local OR remote, the pinned API contract has the version's
+# major.minor, and that a crates.io login token is present in the user's
+# ~/.cargo/credentials.toml (or via CARGO_REGISTRY_TOKEN).
 
 set -euo pipefail
 
@@ -65,6 +66,10 @@ if git ls-remote --tags origin "$TAG" 2>/dev/null | grep -q "refs/tags/$TAG"; th
     die "Remote tag $TAG already exists on origin. Pick a higher version."
 fi
 ok "Tag $TAG not yet on remote"
+
+# The SDK shares its major.minor with the API contract it passes.
+contract_check=$(./scripts/check-contract-version.sh "$VERSION") || die "API contract version check failed (see above)"
+ok "$contract_check"
 
 if [[ -z "${CARGO_REGISTRY_TOKEN:-}" && ! -f "$HOME/.cargo/credentials.toml" ]]; then
     die "No crates.io credentials. Run 'cargo login' or set CARGO_REGISTRY_TOKEN."
