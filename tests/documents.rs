@@ -518,3 +518,213 @@ async fn get_surfaces_document_gone_from_410() {
 
 #[allow(dead_code)]
 fn _ensure_request_import_used(_: &Request) {}
+
+// ---------------------------------------------------------------------------
+// invalid_response: a 2xx whose body is not JSON
+// ---------------------------------------------------------------------------
+
+mod invalid_response {
+    use std::error::Error as _;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    /// A client that retries (so a retry would show) and records `on_error`.
+    fn retrying_client(uri: String) -> (PoliPage, Arc<Mutex<Vec<String>>>) {
+        let errors: Arc<Mutex<Vec<String>>> = Arc::default();
+        let seen = Arc::clone(&errors);
+        let client = PoliPage::builder()
+            .api_key("pp_sandbox_x")
+            .base_url(uri)
+            .max_retries(2)
+            .retry_delay(Duration::from_millis(1))
+            .timeout(Duration::from_secs(2))
+            .on_error(move |e| seen.lock().unwrap().push(e.code().to_owned()))
+            .build()
+            .expect("builder");
+        (client, errors)
+    }
+
+    fn html_200() -> ResponseTemplate {
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/html")
+            .insert_header("x-request-id", "req_invalid_response")
+            .set_body_string("<html><body><h1>Welcome</h1></body></html>")
+    }
+
+    fn assert_invalid_response(err: &poli_page::Error, status: u16) {
+        assert!(
+            matches!(err, poli_page::Error::InvalidResponse { .. }),
+            "{err:?}"
+        );
+        assert_eq!(err.code(), "invalid_response");
+        let message = format!("Invalid response: HTTP {status} body is not JSON");
+        assert_eq!(err.message(), message);
+        assert_eq!(err.to_string(), message);
+        // The error keeps the real 2xx; the payload answers 502.
+        assert_eq!(err.status(), Some(status));
+        assert_eq!(err.request_id(), Some("req_invalid_response"));
+        assert!(!err.is_retryable());
+        assert!(!err.is_network_error());
+        assert!(!err.is_validation_error());
+        let source = err.source().expect("the parse error is the source");
+        assert!(source.is::<serde_json::Error>(), "{source:?}");
+        let payload = serde_json::to_value(err.to_payload()).expect("payload");
+        assert_eq!(
+            payload,
+            json!({
+                "code": "invalid_response",
+                "message": message,
+                "status": 502,
+                "requestId": "req_invalid_response",
+            })
+        );
+    }
+
+    async fn check(
+        server: &MockServer,
+        errors: &Arc<Mutex<Vec<String>>>,
+        err: &poli_page::Error,
+        status: u16,
+    ) {
+        assert_invalid_response(err, status);
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "never retried"
+        );
+        assert_eq!(*errors.lock().unwrap(), ["invalid_response"]);
+    }
+
+    #[tokio::test]
+    async fn documents_get() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/documents/doc_abc123"))
+            .respond_with(html_200())
+            .mount(&server)
+            .await;
+        let (client, errors) = retrying_client(server.uri());
+        let err = client.documents.get("doc_abc123").await.expect_err("html");
+        check(&server, &errors, &err, 200).await;
+    }
+
+    #[tokio::test]
+    async fn documents_thumbnails() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/documents/doc_abc123/thumbnails"))
+            .respond_with(html_200())
+            .mount(&server)
+            .await;
+        let (client, errors) = retrying_client(server.uri());
+        let err = client
+            .documents
+            .thumbnails("doc_abc123", None)
+            .await
+            .expect_err("html");
+        check(&server, &errors, &err, 200).await;
+    }
+
+    #[tokio::test]
+    async fn an_empty_body_and_any_2xx_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/documents/doc_abc123"))
+            .respond_with(
+                ResponseTemplate::new(203).insert_header("x-request-id", "req_invalid_response"),
+            )
+            .mount(&server)
+            .await;
+        let (client, errors) = retrying_client(server.uri());
+        let err = client.documents.get("doc_abc123").await.expect_err("empty");
+        check(&server, &errors, &err, 203).await;
+    }
+
+    #[tokio::test]
+    async fn json_that_breaks_off_after_a_wrong_type_is_still_not_json() {
+        // The descriptor's first field has the wrong type, and the body is
+        // not JSON further on: the body, not the first error, decides.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/documents/doc_abc123"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-request-id", "req_invalid_response")
+                    .set_body_string(r#"{"documentId": 5, <html>"#),
+            )
+            .mount(&server)
+            .await;
+        let (client, errors) = retrying_client(server.uri());
+        let err = client
+            .documents
+            .get("doc_abc123")
+            .await
+            .expect_err("broken");
+        check(&server, &errors, &err, 200).await;
+    }
+
+    #[tokio::test]
+    async fn control_json_of_the_wrong_shape_is_internal_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/documents/doc_abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "unexpected": true })))
+            .mount(&server)
+            .await;
+        let (client, errors) = retrying_client(server.uri());
+        let err = client.documents.get("doc_abc123").await.expect_err("shape");
+        assert_eq!(err.code(), "INTERNAL_ERROR", "{err:?}");
+        assert_eq!(err.status(), Some(200));
+        assert!(!err.is_retryable());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(*errors.lock().unwrap(), ["INTERNAL_ERROR"]);
+    }
+
+    #[tokio::test]
+    async fn control_preview_reads_html() {
+        // documents.preview expects HTML: no invalid_response there.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/documents/doc_abc123/preview"))
+            .respond_with(html_200().insert_header("x-document-page-count", "1"))
+            .mount(&server)
+            .await;
+        let (client, errors) = retrying_client(server.uri());
+        let preview = client.documents.preview("doc_abc123").await.expect("html");
+        assert_eq!(preview.page_count, 1);
+        assert!(errors.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn render_document_and_render_pdf() {
+        let render_input = || poli_page::RenderInput {
+            project: "p".into(),
+            template: "t".into(),
+            data: json!({}),
+            ..Default::default()
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/render"))
+            .respond_with(html_200())
+            .mount(&server)
+            .await;
+        let (client, errors) = retrying_client(server.uri());
+        let err = client
+            .render
+            .document(render_input())
+            .await
+            .expect_err("html");
+        check(&server, &errors, &err, 200).await;
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/render"))
+            .respond_with(html_200())
+            .mount(&server)
+            .await;
+        errors.lock().unwrap().clear();
+        let err = client.render.pdf(render_input()).await.expect_err("html");
+        check(&server, &errors, &err, 200).await;
+    }
+}

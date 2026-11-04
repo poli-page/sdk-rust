@@ -42,7 +42,10 @@ impl Documents {
     /// - [`Error::NotFound`] when no document with this ID exists.
     /// - [`Error::Gone`] when the document was deleted.
     /// - [`Error::Auth`] / [`Error::PermissionDenied`] on credential issues.
-    /// - [`Error::Internal`] when the response body fails to parse.
+    /// - [`Error::InvalidResponse`] when a 2xx answer's body is not JSON
+    ///   (`invalid_response`, not retried).
+    /// - [`Error::Internal`] when the response body is JSON but not a
+    ///   document descriptor.
     ///
     /// # Example
     ///
@@ -158,11 +161,7 @@ impl Documents {
             timeout: None,
         };
         let resp = self.inner.execute(attempt).await?;
-        let envelope: ThumbnailsResponse =
-            serde_json::from_slice(&resp.body).map_err(|e| Error::Internal {
-                message: format!("could not parse thumbnails response: {e}"),
-                status: Some(resp.status),
-            })?;
+        let envelope: ThumbnailsResponse = self.inner.decode_json(&resp, "thumbnails response")?;
         Ok(envelope.thumbnails)
     }
 
@@ -216,8 +215,5 @@ where
         timeout: None,
     };
     let resp = inner.execute(attempt).await?;
-    serde_json::from_slice::<T>(&resp.body).map_err(|e| Error::Internal {
-        message: format!("could not parse response body as JSON: {e}"),
-        status: Some(resp.status),
-    })
+    inner.decode_json(&resp, "response body")
 }

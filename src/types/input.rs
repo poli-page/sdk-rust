@@ -99,8 +99,9 @@ pub struct RenderInput {
     #[serde(skip)]
     pub idempotency_key: Option<String>,
 
-    /// Per-call timeout override. Stripped from the wire body and consumed by
-    /// the SDK's transport layer.
+    /// Per-call timeout override: bounds each attempt of the render, and the
+    /// presigned-URL download of `render.pdf` / `render.pdf_stream`. Stripped
+    /// from the wire body and consumed by the SDK's transport layer.
     #[serde(skip)]
     pub timeout: Option<Duration>,
 }

@@ -1,6 +1,6 @@
 [package]
 name          = "poli-page"
-version       = "0.11.0"
+version       = "0.13.0"
 edition       = "2021"
 rust-version  = "1.93"
 authors       = ["Poli Page"]
@@ -32,6 +32,11 @@ http         = "1.1"
 url          = "2.5"
 httpdate     = "1.0"
 rand         = "0.10"
+
+# `render_to_file` asks the OS whether the target may be written
+# (`access(W_OK)`) without opening it; already in the graph through tempfile.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["fs", "std"] }
 
 [dev-dependencies]
 tokio              = { version = "1.40", features = ["macros", "rt-multi-thread", "time", "net", "sync", "io-util", "test-util"] }

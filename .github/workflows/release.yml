@@ -75,6 +75,14 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Releasing ${TAG} (Cargo.toml = ${CRATE_VERSION})"
 
+      # The SDK shares its major.minor with the Poli Page API. Reads the
+      # contract commit ci.yml pins (all workflows must pin the same one) and
+      # requires a stable contract tag vX.Y.Z on it with the tag's major.minor.
+      - name: Pinned API contract matches the tag's major.minor
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: ./scripts/check-contract-version.sh "$TAG"
+
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo doc --no-deps --all-features --locked
@@ -82,7 +90,7 @@ jobs:
       # the version ci.yml pins.
       - name: API contract
         id: contract
-        uses: poli-page/api-contract@0eba96c1ecf9a28b7e259f444f3ca5b7c059d5fd # v1.3.0
+        uses: poli-page/api-contract@1f705b3ce3e15ff56e2f7b8249c1a2983af2312c # v0.13.0
       - run: cargo test --all-features --locked
         env:
           CI: "true"

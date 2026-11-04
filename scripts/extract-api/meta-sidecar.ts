@@ -35,6 +35,8 @@ export function buildMetaSidecar(packageVersion: string): MetaSidecar {
       { code: 'timeout' },
       { code: 'aborted' },
       { code: 'DOWNLOAD_FAILED' },
+      { code: 'invalid_response' },
+      { code: 'io_error' },
       { code: 'INTERNAL_ERROR' },
       { code: 'MISSING_API_KEY' },
       { code: 'INVALID_API_KEY' },

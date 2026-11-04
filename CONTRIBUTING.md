@@ -100,6 +100,10 @@ nightly with `POLI_PAGE_API_KEY` injected as a GitHub secret.
 
 ## Releases
 
+Which version to release is set out in [RELEASING.md](RELEASING.md#versions):
+the crate shares its major.minor with the Poli Page API, and the release
+refuses a tag whose major.minor differs from the pinned API contract's.
+
 Releases are **tag-driven**. Pushing a `vX.Y.Z` tag triggers
 `.github/workflows/release.yml`, which runs the full verify gate, pauses
 for a manual approval on the `crates-io-publish` environment, and then
@@ -123,7 +127,9 @@ behind us.
    ```
    The tag is only the trigger — the version of record is `Cargo.toml`. The
    `verify` job refuses to publish if `vX.Y.Z` ≠ the `Cargo.toml` version,
-   so always bump-commit *then* tag.
+   so always bump-commit *then* tag. It also refuses a tag whose
+   major.minor is not the pinned API contract's
+   (`scripts/check-contract-version.sh X.Y.Z` runs the same check locally).
 6. Watch the run (`gh run watch` or the Actions tab). After `verify`
    passes, the `publish` job waits on the `crates-io-publish` environment
    for **your approval** — click *Review deployments → Approve*. On

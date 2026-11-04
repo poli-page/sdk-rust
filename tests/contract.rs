@@ -76,6 +76,19 @@ struct Contract {
 struct Policy {
     cancellation_sdks: Vec<String>,
     normalizations: Vec<Normalization>,
+    /// The keys of the body an integration answers an error with:
+    /// `Error::to_payload()`.
+    impl_error_body: Option<Vec<String>>,
+    /// The status `to_payload()` answers for the SDK codes that have none of
+    /// their own (or a 2xx).
+    impl_status_for_sdk_code: Option<BTreeMap<String, u16>>,
+    /// The SDK codes and their exact messages.
+    sdk_errors: Option<BTreeMap<String, SdkErrorPolicy>>,
+}
+
+#[derive(Deserialize)]
+struct SdkErrorPolicy {
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -1080,6 +1093,15 @@ fn trials() -> Vec<Trial> {
             }
         },
     ));
+    let policy = PayloadPolicy {
+        body: contract.policy.impl_error_body,
+        statuses: contract.policy.impl_status_for_sdk_code,
+        sdk_errors: contract.policy.sdk_errors,
+    };
+    trials.push(Trial::test(
+        "api_contract::to_payload_matches_the_policy",
+        move || to_payload_matches(policy).map_err(Failed::from),
+    ));
     trials.push(Trial::test("api_contract::skip_list_ids_run_here", move || {
         let stale: Vec<&String> = skip.keys().filter(|id| !ids.contains(id)).collect();
         let idle: Vec<&String> = skip
@@ -1104,6 +1126,105 @@ fn trials() -> Vec<Trial> {
         }
     }));
     trials
+}
+
+/// An error of each SDK code the policy names, built the way the SDK builds
+/// it, with `status` for a code that carries the API's.
+fn sdk_error(code: &str, status: u16) -> Option<Error> {
+    Some(match code {
+        "network_error" => Error::Connection {
+            message: "Network request failed".into(),
+            source: "refused".into(),
+        },
+        "timeout" => Error::Timeout {
+            timeout: Duration::from_millis(1000),
+        },
+        "invalid_response" => Error::InvalidResponse {
+            status,
+            request_id: Some("req_1".into()),
+            source: None,
+        },
+        "io_error" => Error::Io {
+            path: "out.pdf".into(),
+            source: std::io::Error::other("disk full"),
+        },
+        _ => return None,
+    })
+}
+
+/// The parts of the policy `to_payload()` and the SDK codes answer to.
+struct PayloadPolicy {
+    body: Option<Vec<String>>,
+    statuses: Option<BTreeMap<String, u16>>,
+    sdk_errors: Option<BTreeMap<String, SdkErrorPolicy>>,
+}
+
+/// `to_payload()` against `policy.implErrorBody`,
+/// `policy.implStatusForSdkCode` and the messages of `policy.sdkErrors`.
+fn to_payload_matches(policy: PayloadPolicy) -> Result<(), String> {
+    let body = policy
+        .body
+        .ok_or("the contract has no policy.implErrorBody")?;
+    let statuses = policy
+        .statuses
+        .ok_or("the contract has no policy.implStatusForSdkCode")?;
+    let sdk_errors = policy
+        .sdk_errors
+        .ok_or("the contract has no policy.sdkErrors")?;
+    let mut problems = Vec::new();
+
+    let payload = serde_json::to_value(Error::Aborted.to_payload()).map_err(|e| e.to_string())?;
+    let mut keys: Vec<&str> = payload
+        .as_object()
+        .ok_or("to_payload() is not an object")?
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let mut want: Vec<&str> = body.iter().map(String::as_str).collect();
+    keys.sort_unstable();
+    want.sort_unstable();
+    if keys != want {
+        problems.push(format!(
+            "to_payload() keys {keys:?}, the contract's {want:?}"
+        ));
+    }
+
+    for (code, status) in &statuses {
+        match sdk_error(code, 200) {
+            None => problems.push(format!("implStatusForSdkCode names {code}: add it here")),
+            Some(err) => {
+                let got = err.to_payload().status;
+                if got != Some(*status) {
+                    problems.push(format!("{code}: to_payload() status {got:?}, not {status}"));
+                }
+            }
+        }
+    }
+
+    // The messages with no placeholder but `{status}`, `{timeoutMs}` or
+    // `{reason}`, for the codes built here.
+    for (code, policy) in &sdk_errors {
+        let Some(err) = sdk_error(code, 200) else {
+            continue;
+        };
+        let want = policy
+            .message
+            .replace("{status}", "200")
+            .replace("{timeoutMs}", "1000")
+            .replace("{reason}", "out.pdf: disk full");
+        if err.message() != want {
+            problems.push(format!("{code}: message {:?}, not {want:?}", err.message()));
+        }
+        if err.code() != code {
+            problems.push(format!("{code}: code() is {}", err.code()));
+        }
+    }
+
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
+    }
 }
 
 fn main() {

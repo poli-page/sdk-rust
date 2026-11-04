@@ -1,5 +1,7 @@
 //! `render_to_file` end-to-end test against a wiremock server.
 
+use std::error::Error as _;
+use std::path::Path;
 use std::time::Duration;
 
 use poli_page::{PoliPage, RenderInput};
@@ -145,4 +147,448 @@ async fn render_to_file_surfaces_download_failed_on_presigned_404() {
         .expect_err("download must fail");
     assert!(matches!(err, poli_page::Error::Download { .. }));
     assert_eq!(err.status(), Some(404));
+}
+
+// ---------------------------------------------------------------------------
+// io_error: the file cannot be written, the target is left as it was
+// ---------------------------------------------------------------------------
+
+/// The names in `dir`, sorted.
+fn listing(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("read dir")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A test that cannot run here (root, no symlink privilege). In CI it fails
+/// instead, so a skip never reads as a pass.
+fn skip(reason: &str) {
+    assert!(
+        std::env::var("CI").map_or(true, |v| v.is_empty()),
+        "cannot run in CI: {reason}"
+    );
+    eprintln!("skipped: {reason}");
+}
+
+/// `io_error` for `target`, the path given to `render_to_file`: the
+/// message names it, then gives the I/O error's text.
+fn assert_io_error(err: &poli_page::Error, target: &std::path::Path) {
+    assert!(matches!(err, poli_page::Error::Io { .. }), "{err:?}");
+    assert_eq!(err.code(), "io_error");
+    assert_eq!(err.status(), None);
+    assert_eq!(err.request_id(), None);
+    assert!(!err.is_retryable());
+    assert!(!err.is_network_error());
+    // The message carries the I/O error's own text, which is the source.
+    let source = err
+        .source()
+        .and_then(|s| s.downcast_ref::<std::io::Error>())
+        .expect("the io::Error is the source");
+    assert_eq!(
+        err.message(),
+        format!("Failed to write PDF: {}: {source}", target.display())
+    );
+    assert!(!err.message().contains(".part"), "{err}");
+    assert_eq!(err.to_string(), err.message());
+    let payload = serde_json::to_value(err.to_payload()).expect("payload");
+    assert_eq!(payload["code"], "io_error");
+    assert!(payload["status"].is_null());
+}
+
+/// A server that answers the render and the download, and counts both.
+async fn counted_servers() -> MockServer {
+    let (server, _) = make_servers().await;
+    server
+}
+
+async fn client_for(server: &MockServer) -> PoliPage {
+    PoliPage::builder()
+        .api_key("pp_sandbox_x")
+        .base_url(server.uri())
+        .timeout(Duration::from_secs(2))
+        .max_retries(0)
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn render_to_file_is_io_error_when_a_parent_directory_cannot_be_created() {
+    let server = counted_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    // A file where a parent directory should be.
+    std::fs::write(dir.path().join("taken"), b"a file").unwrap();
+    let target = dir.path().join("taken/out.pdf");
+    let err = poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect_err("parent is a file");
+    assert_io_error(&err, &target);
+    // Checked before the render: nothing was rendered.
+    assert!(server.received_requests().await.unwrap().is_empty());
+    assert_eq!(listing(dir.path()), ["taken"]);
+}
+
+/// `io_error` `not a regular file`, refused before any API call.
+async fn assert_not_a_regular_file(server: &MockServer, err: &poli_page::Error, target: &Path) {
+    assert_io_error(err, target);
+    assert_eq!(
+        err.message(),
+        format!(
+            "Failed to write PDF: {}: not a regular file",
+            target.display()
+        )
+    );
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "no API call"
+    );
+}
+
+#[tokio::test]
+async fn render_to_file_refuses_a_directory_target_before_rendering() {
+    let server = counted_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("keep.txt"), b"kept").unwrap();
+    let err = poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect_err("target is a directory");
+    assert_not_a_regular_file(&server, &err, &target).await;
+    assert_eq!(listing(dir.path()), ["out.pdf"], "no temporary file left");
+    assert_eq!(std::fs::read(target.join("keep.txt")).unwrap(), b"kept");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_refuses_a_fifo_target_before_rendering() {
+    use std::os::unix::fs::FileTypeExt;
+    let server = counted_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&target)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo failed");
+    // Never opened: an open of a FIFO with no reader would block.
+    let err = poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect_err("target is a FIFO");
+    assert_not_a_regular_file(&server, &err, &target).await;
+    assert!(std::fs::symlink_metadata(&target)
+        .unwrap()
+        .file_type()
+        .is_fifo());
+    assert_eq!(listing(dir.path()), ["out.pdf"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_is_io_error_when_the_directory_is_read_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let server = counted_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    std::fs::write(&target, b"the previous PDF").unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    // Root writes anyway: nothing to check then.
+    let probe = dir.path().join("probe");
+    if std::fs::write(&probe, b"").is_ok() {
+        std::fs::remove_file(&probe).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        skip("this user can write to a read-only directory");
+        return;
+    }
+    let result = poli_page::render_to_file(&client, input(), &target).await;
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let err = result.expect_err("read-only directory");
+    assert_io_error(&err, &target);
+    assert_eq!(
+        err.source()
+            .and_then(|s| s.downcast_ref::<std::io::Error>())
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+    assert_eq!(std::fs::read(&target).unwrap(), b"the previous PDF");
+}
+
+#[tokio::test]
+async fn render_to_file_creates_no_file_when_the_render_fails() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+            "error": "TEMPLATE_NOT_FOUND",
+            "detail": "Template 't' not found.",
+        })))
+        .mount(&server)
+        .await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let err = poli_page::render_to_file(&client, input(), dir.path().join("out.pdf"))
+        .await
+        .expect_err("render fails");
+    assert_eq!(err.code(), "TEMPLATE_NOT_FOUND");
+    assert!(listing(dir.path()).is_empty(), "{:?}", listing(dir.path()));
+}
+
+#[tokio::test]
+async fn render_to_file_keeps_the_target_on_a_download_failure() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/missing.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/missing.pdf"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    std::fs::write(&target, b"the previous PDF").unwrap();
+    let err = poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect_err("download fails");
+    assert_eq!(err.code(), "DOWNLOAD_FAILED");
+    assert_eq!(std::fs::read(&target).unwrap(), b"the previous PDF");
+    assert_eq!(listing(dir.path()), ["out.pdf"]);
+}
+
+#[tokio::test]
+async fn render_to_file_leaves_no_temporary_file_on_success() {
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    poli_page::render_to_file(&client, input(), dir.path().join("out.pdf"))
+        .await
+        .expect("render_to_file");
+    assert_eq!(listing(dir.path()), ["out.pdf"]);
+}
+
+// ---------------------------------------------------------------------------
+// A symbolic link stays a link; an existing file keeps its permissions
+// ---------------------------------------------------------------------------
+
+/// Makes `link` point at `to`. `false` when the platform refuses (Windows
+/// without the symlink privilege or developer mode): the caller skips.
+fn make_symlink(to: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(to, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(to, link);
+    match made {
+        Ok(()) => true,
+        Err(e) => {
+            skip(&format!("cannot create a symbolic link here: {e}"));
+            false
+        }
+    }
+}
+
+#[tokio::test]
+async fn render_to_file_writes_through_a_symlinked_target() {
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let store = dir.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    let real = store.join("real.pdf");
+    std::fs::write(&real, b"the previous PDF").unwrap();
+    let link = dir.path().join("out.pdf");
+    if !make_symlink(&real, &link) {
+        return;
+    }
+    poli_page::render_to_file(&client, input(), &link)
+        .await
+        .expect("render_to_file through a link");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link stays a link"
+    );
+    assert_eq!(std::fs::read_link(&link).unwrap(), real);
+    assert_eq!(std::fs::read(&real).unwrap(), PDF_STUB);
+    // The temporary file went next to the real file, and is gone.
+    assert_eq!(listing(dir.path()), ["out.pdf", "store"]);
+    assert_eq!(listing(&store), ["real.pdf"]);
+}
+
+#[tokio::test]
+async fn render_to_file_failing_through_a_symlink_keeps_the_link_and_the_file() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/missing.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/missing.pdf"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let real = dir.path().join("real.pdf");
+    std::fs::write(&real, b"the previous PDF").unwrap();
+    let link = dir.path().join("out.pdf");
+    if !make_symlink(&real, &link) {
+        return;
+    }
+    let err = poli_page::render_to_file(&client, input(), &link)
+        .await
+        .expect_err("download fails");
+    assert_eq!(err.code(), "DOWNLOAD_FAILED");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read(&real).unwrap(), b"the previous PDF");
+    assert_eq!(listing(dir.path()), ["out.pdf", "real.pdf"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_writes_the_file_a_dangling_symlink_names() {
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let link = dir.path().join("out.pdf");
+    std::os::unix::fs::symlink("store/new.pdf", &link).unwrap();
+    poli_page::render_to_file(&client, input(), &link)
+        .await
+        .expect("render_to_file through a dangling link");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        std::fs::read(dir.path().join("store/new.pdf")).unwrap(),
+        PDF_STUB
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_keeps_the_permission_mode_of_an_existing_target() {
+    use std::os::unix::fs::PermissionsExt;
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    for mode in [0o600, 0o640, 0o604] {
+        let target = dir.path().join(format!("out-{mode:o}.pdf"));
+        std::fs::write(&target, b"the previous PDF").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).unwrap();
+        poli_page::render_to_file(&client, input(), &target)
+            .await
+            .expect("render_to_file");
+        assert_eq!(std::fs::read(&target).unwrap(), PDF_STUB);
+        let kept = std::fs::metadata(&target).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(kept, mode, "mode {mode:o}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn control_a_new_target_gets_the_default_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect("render_to_file");
+    // A plain new file: what `File::create` would give under this umask.
+    let control = dir.path().join("control");
+    std::fs::write(&control, b"").unwrap();
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode(&target), mode(&control));
+}
+
+#[tokio::test]
+async fn render_to_file_refuses_a_read_only_target_before_rendering() {
+    let server = counted_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    std::fs::write(&target, b"the previous PDF").unwrap();
+    let mut read_only = std::fs::metadata(&target).unwrap().permissions();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&target, read_only).unwrap();
+    // Root writes a read-only file anyway: nothing to check then.
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open(&target)
+        .is_ok()
+    {
+        skip("this user can write a read-only file");
+        return;
+    }
+    let err = poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect_err("read-only target");
+    assert_io_error(&err, &target);
+    assert_eq!(
+        err.source()
+            .and_then(|s| s.downcast_ref::<std::io::Error>())
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "no API call"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), b"the previous PDF");
+    assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
+    assert_eq!(listing(dir.path()), ["out.pdf"]);
+    // Let the temporary directory be removed on every platform.
+    let mut writable = std::fs::metadata(&target).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    writable.set_readonly(false);
+    std::fs::set_permissions(&target, writable).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_reads_a_relative_hop_from_the_links_real_directory() {
+    use std::os::unix::fs::symlink;
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("real/dir")).unwrap();
+    symlink(root.join("real/dir"), root.join("sym")).unwrap();
+    symlink("../a.pdf", root.join("real/dir/link")).unwrap();
+    // Dangling first (`real/a.pdf` is created), then existing (replaced).
+    for round in ["dangling", "existing"] {
+        poli_page::render_to_file(&client, input(), root.join("sym/link"))
+            .await
+            .expect(round);
+        assert_eq!(
+            std::fs::read(root.join("real/a.pdf")).unwrap(),
+            PDF_STUB,
+            "{round}"
+        );
+        assert!(!root.join("a.pdf").exists(), "{round}: not next to `sym`");
+        assert!(std::fs::symlink_metadata(root.join("real/dir/link"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(listing(&root.join("real")), ["a.pdf", "dir"], "{round}");
+    }
 }

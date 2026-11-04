@@ -8,6 +8,83 @@ Breaking changes and their upgrade path are summarized in [MIGRATION.md](MIGRATI
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-02
+
+Conformance with the Poli Page API contract v0.13.0
+([poli-page/api-contract](https://github.com/poli-page/api-contract)). The
+crate now shares its major.minor with the Poli Page API (see
+[RELEASING.md](RELEASING.md#versions)), so it goes from 0.11 to 0.13. See
+[MIGRATION.md](MIGRATION.md#from-0110-to-0130).
+
+### Added
+
+- `Error::InvalidResponse` (`invalid_response`): a 2xx answer whose body is
+  not JSON, from a method that expects JSON (`render.*`, `documents.get`,
+  `documents.thumbnails`). Its message is
+  `Invalid response: HTTP <status> body is not JSON`, its `status()` the real
+  2xx, its `request_id()` the answer's `X-Request-Id`, its `source()` the JSON
+  error. It is never retried: something between the SDK and the API (a proxy,
+  a captive portal) answered, and would answer the same way again.
+  `to_payload()` gives it status 502, since an integration must not answer an
+  error with a 2xx.
+- `Error::Io` (`io_error`): `render_to_file` (async and blocking) could not
+  write the file. Its message is `Failed to write PDF: <path>: <reason>`: the
+  path the caller gave (never the temporary file), then the
+  `std::io::Error`'s own text. It has no status, is never retried, and the
+  `std::io::Error` is its `source()`.
+- The presigned-URL download is bounded by the client's `timeout` (the
+  input's `timeout` when set, for `render.pdf` and `render.pdf_stream`):
+  - `render.pdf` and `DocumentDescriptor::download_pdf()`: the whole
+    download, body included;
+  - `render.pdf_stream` (and so `render_to_file`): an idle timeout, the wait
+    for the first byte and each gap between two chunks, so a large PDF read
+    at the caller's pace is not cut off.
+
+  Past it, the call fails with `DOWNLOAD_FAILED`, the message
+  `Failed to download PDF: timeout` and no status, never retried. A timeout
+  of an injected `reqwest::Client` that fires during the download gives the
+  same error. The download had no bound before, so a storage that stopped
+  answering could hold a call for ever.
+- `RELEASING.md` and `scripts/check-contract-version.sh`: the Release
+  workflow and `scripts/release.sh` refuse a tag whose major.minor differs
+  from the pinned API contract's.
+
+### Changed
+
+- **BREAKING**: a 2xx answer whose body is not JSON was `Error::Internal`
+  (`INTERNAL_ERROR`); it is now `Error::InvalidResponse`
+  (`invalid_response`). A JSON body of an unexpected shape is still
+  `INTERNAL_ERROR`.
+- **BREAKING**: `render_to_file` reports a file it cannot write (creating a
+  parent directory, creating, writing or renaming the file) as `Error::Io`
+  (`io_error`, `Failed to write PDF: <path>: <reason>`); it was
+  `Error::InvalidOptions` with a message of its own.
+- **BREAKING**: `render_to_file` writes to a temporary file next to the
+  target (`.<name>.<random>.part`) and renames it over the target once the
+  PDF is complete. A failed call (a render error, a broken, short or
+  timed-out download, a write error, a dropped future) now leaves an
+  existing file as it was and creates no file; it used to truncate the
+  target and could leave a partial PDF. A symbolic link at the target is
+  resolved first: the file it points to is replaced and the link stays a
+  link. An existing file keeps its permission mode, but its owner and hard
+  links do not survive the rename, which makes a new file. An existing path
+  that is not a regular file (a directory, a FIFO, a device, a socket) is
+  refused with `Failed to write PDF: <path>: not a regular file`, and a file
+  this process may not write (read-only) with `io_error` too; both are left
+  as they are. These checks read the file's metadata only (`access(W_OK)` on
+  Unix, the read-only attribute on Windows) and, with the temporary file,
+  come before the render, so a path that cannot be written costs no render.
+- `render.pdf` and `download_pdf()` fail with `DOWNLOAD_FAILED` when the
+  download takes longer than `timeout` in all (60 s by default). Use
+  `render.pdf_stream` or `render_to_file` for a PDF that takes longer to
+  download, or raise `timeout`.
+- `on_error` now fires when a 2xx body cannot be decoded (`invalid_response`
+  or `INTERNAL_ERROR`); it fired only for errors of the request itself.
+- `to_payload()` is documented and tested as the exact body an integration
+  answers with: the keys `code`, `message`, `status` and `requestId`, and
+  nothing else (unchanged).
+- The install snippets ask for `0.13`.
+
 ## [0.11.0] - 2026-10-30
 
 Conformance with the Poli Page API contract v1.3.0

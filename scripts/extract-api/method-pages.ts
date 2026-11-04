@@ -34,10 +34,12 @@ const TRANSPORT = ['timeout', 'network_error'];
 // Every `/v1/*` route: a non-`pp_` bearer goes the session path and gets
 // MISSING_API_KEY; a purged org refuses all; a BYO org whose role cannot be
 // assumed gets STORAGE_ACCESS_DENIED; INTERNAL_ERROR is a 5xx, a non-JSON
-// error body or a response the SDK cannot parse.
+// error body or a JSON response of an unexpected shape.
 const ANY_V1_CALL = ['MISSING_API_KEY', 'INVALID_API_KEY', 'ORGANIZATION_PURGED', 'STORAGE_ACCESS_DENIED', 'INTERNAL_ERROR'];
 // Org-state gates on writes (any method but GET).
 const WRITE_GATES = ['ORGANIZATION_PAYMENT_GRACE', 'ORGANIZATION_CANCELLED', 'ORGANIZATION_MIGRATING'];
+// A 2xx whose body is not JSON, from a method that expects JSON (client.rs).
+const JSON_ANSWER = ['invalid_response'];
 // `POST /v1/render`. No ENVIRONMENT_MISMATCH: `RenderInput` sends no
 // `environment`. RATE_LIMIT_EXCEEDED throttles `/v1/render*` only.
 const RENDER = [
@@ -45,7 +47,7 @@ const RENDER = [
   'TEMPLATE_ERROR', 'TEMPLATE_UNSAFE', 'EMPTY_DOCUMENT', 'PROJECT_NOT_FOUND', 'PROJECT_NOT_IN_ENVIRONMENT', 'TEMPLATE_NOT_FOUND',
   'RENDER_BODY_TOO_LARGE', 'DOCUMENT_TOO_LARGE', 'QUOTA_EXCEEDED', 'OVERAGE_CAP_EXCEEDED',
   'RATE_LIMIT_EXCEEDED', 'PUBLISH_IN_PROGRESS', 'RENDER_TIMEOUT',
-  ...WRITE_GATES, ...ANY_V1_CALL, ...TRANSPORT,
+  ...WRITE_GATES, ...ANY_V1_CALL, ...TRANSPORT, ...JSON_ANSWER,
 ];
 // The presigned-URL fetch after the render (`Error::Download`).
 const RENDER_THEN_DOWNLOAD = [...RENDER, 'DOWNLOAD_FAILED'];
@@ -78,7 +80,7 @@ const METHODS: readonly MethodTarget[] = [
     slug: 'documents-get',
     displayName: 'client.documents.get',
     exampleFile: 'documents-get.rs',
-    errorCodes: DOCUMENT_READ,
+    errorCodes: [...DOCUMENT_READ, ...JSON_ANSWER],
     locate: (td) => findMethodOn(td, 'Documents', 'get'),
   },
   {
@@ -94,7 +96,7 @@ const METHODS: readonly MethodTarget[] = [
     exampleFile: 'documents-thumbnails.rs',
     errorCodes: [
       'DOCUMENT_NOT_FOUND', 'FORBIDDEN', 'DOCUMENT_GONE', 'THUMBNAILS_NOT_AVAILABLE', 'VALIDATION_ERROR',
-      'QUOTA_EXCEEDED', 'OVERAGE_CAP_EXCEEDED', ...WRITE_GATES, ...ANY_V1_CALL, ...TRANSPORT,
+      'QUOTA_EXCEEDED', 'OVERAGE_CAP_EXCEEDED', ...WRITE_GATES, ...ANY_V1_CALL, ...TRANSPORT, ...JSON_ANSWER,
     ],
     locate: (td) => findMethodOn(td, 'Documents', 'thumbnails'),
   },
@@ -112,8 +114,9 @@ const METHODS: readonly MethodTarget[] = [
     slug: 'render-to-file',
     displayName: 'render_to_file',
     exampleFile: 'render-to-file.rs',
-    // invalid_options: creating, writing or flushing the file failed (fs.rs).
-    errorCodes: [...RENDER_THEN_DOWNLOAD, 'invalid_options'],
+    // io_error: creating a directory, or creating, writing or renaming the
+    // temporary file failed (fs.rs).
+    errorCodes: [...RENDER_THEN_DOWNLOAD, 'io_error'],
     locate: (td) => findTopLevelFunction(td, 'render_to_file'),
   },
 ];

@@ -5,6 +5,16 @@ description: Upgrade guides for moving between breaking versions of the Rust SDK
 
 This page tracks breaking changes between versions of the `poli-page` crate. Before `1.0.0`, a breaking change bumps the minor version. For the full per-release diff, see the [changelog](../changelog/), and for every before/after table, [`MIGRATION.md` in the repo](https://github.com/poli-page/sdk-rust/blob/main/MIGRATION.md).
 
+## From 0.11.0 to 0.13.0
+
+The crate shares its major.minor with the Poli Page API, so there is no 0.12. It follows the API contract v0.13.0.
+
+- **`invalid_response`**: a 2xx whose body is not JSON was `INTERNAL_ERROR` (`Error::Internal`); it is now `Error::InvalidResponse` (`invalid_response`, `Invalid response: HTTP <status> body is not JSON`) with the real 2xx status and the request id, not retried. `to_payload()` answers 502 for it.
+- **`io_error`**: `render_to_file` reports a file it cannot write as `Error::Io` (`io_error`, `Failed to write PDF: <path>: <reason>`, the `std::io::Error` as `source()`), not `Error::InvalidOptions`.
+- **Atomic write**: `render_to_file` writes to a temporary `.part` file and renames it over the target once the PDF is complete, so a failed call leaves the target as it was. A symbolic link at the target is resolved first and stays a link, and an existing file keeps its permission mode; its owner and hard links do not survive the rename. A target that is not a regular file, or is read-only, is refused with `io_error` before the render.
+- **Download timeout**: `timeout` bounds the presigned-URL download: the whole download for `render.pdf` and `download_pdf()`, the wait for each chunk for `render.pdf_stream` and `render_to_file`. Past it: `DOWNLOAD_FAILED`, `Failed to download PDF: timeout`, no status, not retried.
+- **`on_error`** fires when a 2xx body cannot be decoded.
+
 ## From 0.10.0 to 0.11.0
 
 The SDK follows the retry policy and the error messages of the Poli Page API contract.

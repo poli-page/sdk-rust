@@ -1,5 +1,4 @@
 //! Single `Error` enum + predicate helpers + wire-level code constants.
-//! See spec §7.
 
 use std::time::Duration;
 
@@ -8,9 +7,9 @@ use std::time::Duration;
 /// The variants split into two families:
 ///
 /// - **Reserved (SDK-internal)** — `InvalidOptions`, `Connection`, `Timeout`,
-///   `Aborted`, `Download`, `Internal`. Carry no API `code`; the wire-level
-///   constant returned by [`Error::code`] is fixed per variant
-///   (`"invalid_options"`, `"network_error"`, etc.).
+///   `Aborted`, `Download`, `InvalidResponse`, `Io`, `Internal`. Carry no API
+///   `code`; the wire-level constant returned by [`Error::code`] is fixed per
+///   variant (`"invalid_options"`, `"network_error"`, etc.).
 /// - **API status** — `BadRequest`, `Auth`, `PermissionDenied`, `NotFound`,
 ///   `Gone`, `RateLimited`, `Api`. Carry the HTTP `status`, the wire
 ///   `code` field, the human `message`, and the `request_id` (when the
@@ -65,7 +64,9 @@ pub enum Error {
     Download {
         /// `Failed to download PDF: HTTP <status>` when the storage answered
         /// with a non-2xx status, `Failed to download PDF: network error`
-        /// when it did not answer or the body failed while it was read.
+        /// when it did not answer or the body failed while it was read, and
+        /// `Failed to download PDF: timeout` when the download outlasted the
+        /// client's `timeout`.
         message: String,
         /// The S3 response status, if the request reached the storage layer.
         status: Option<u16>,
@@ -74,7 +75,40 @@ pub enum Error {
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
-    /// SDK-side parse / decode failure, or other "shouldn't happen" conditions.
+    /// A 2xx answer whose body is not JSON, from a method that expects JSON
+    /// (`render.*`, `documents.get`, `documents.thumbnails`). Something
+    /// between the SDK and the API (a proxy, a captive portal) answered, and
+    /// it would answer the same way again: never retried. Displays as
+    /// `Invalid response: HTTP <status> body is not JSON`.
+    #[error("Invalid response: HTTP {status} body is not JSON")]
+    InvalidResponse {
+        /// The real 2xx status of the answer. [`Error::to_payload`] answers
+        /// 502 instead, since an integration must not answer an error with
+        /// a 2xx.
+        status: u16,
+        /// `X-Request-Id` header from the response, if present.
+        request_id: Option<String>,
+        /// The JSON parse error.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
+    /// [`crate::render_to_file`] could not write the file: the target is not
+    /// a regular file or may not be written, or creating a parent directory,
+    /// creating, writing or renaming the temporary file failed. Never
+    /// retried, no status. The target file is left as it was. Displays as
+    /// `Failed to write PDF: <path>: <the I/O error's own text>`.
+    #[error("Failed to write PDF: {}: {source}", .path.display())]
+    Io {
+        /// The path the caller gave `render_to_file`.
+        path: std::path::PathBuf,
+        /// The I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// SDK-side decode failure (a JSON answer of an unexpected shape, an HTML
+    /// preview that is not UTF-8), or other "shouldn't happen" conditions.
     #[error("internal error: {message}")]
     Internal {
         /// Human-readable summary.
@@ -208,12 +242,16 @@ impl Clone for Error {
     /// Hand-rolled `Clone` so `RetryEvent` can carry an owned `Error`.
     ///
     /// The `Box<dyn std::error::Error + Send + Sync>` source on `Connection`,
-    /// `Download` and the API variants is NOT `Clone` (the trait object holds whatever the
-    /// original error was — `reqwest::Error`, `io::Error`, etc.). Per spec
-    /// §10.2 the cloned event drops the source — `message`, `code`, `status`,
-    /// and `request_id` are preserved; the underlying chain isn't. Good
-    /// enough for observability; users who need the source should inspect
-    /// the original `Error` returned by the method call.
+    /// `Download`, `InvalidResponse` and the API variants is NOT `Clone` (the
+    /// trait object holds whatever the original error was — `reqwest::Error`,
+    /// `io::Error`, etc.), and neither is the `io::Error` of `Io`. The clone
+    /// drops the source (`Io` keeps a copy with the same kind and text) —
+    /// `message`, `code`, `status`, and `request_id` are preserved; the
+    /// underlying chain isn't. Good enough for observability; users who need
+    /// the source should inspect the original `Error` returned by the method
+    /// call.
+    // One arm per variant: splitting it would only scatter the list.
+    #[allow(clippy::too_many_lines)]
     fn clone(&self) -> Self {
         // The API variants share their fields; the source is dropped.
         macro_rules! api {
@@ -243,6 +281,17 @@ impl Clone for Error {
                 message: message.clone(),
                 status: *status,
                 source: None,
+            },
+            Error::InvalidResponse {
+                status, request_id, ..
+            } => Error::InvalidResponse {
+                status: *status,
+                request_id: request_id.clone(),
+                source: None,
+            },
+            Error::Io { path, source } => Error::Io {
+                path: path.clone(),
+                source: std::io::Error::new(source.kind(), source.to_string()),
             },
             Error::Internal { message, status } => Error::Internal {
                 message: message.clone(),
@@ -317,7 +366,7 @@ impl Clone for Error {
 
 /// The codes a 429 or 5xx can carry that waiting cannot fix: the two quota
 /// codes last until the monthly reset, `STORAGE_ACCESS_DENIED` until the
-/// customer restores its bucket role. Never retried (spec §9.1).
+/// customer restores its bucket role. Never retried.
 pub(crate) const NON_RETRYABLE_CODES: [&str; 3] = [
     error_codes::QUOTA_EXCEEDED,
     error_codes::OVERAGE_CAP_EXCEEDED,
@@ -325,7 +374,7 @@ pub(crate) const NON_RETRYABLE_CODES: [&str; 3] = [
 ];
 
 impl Error {
-    /// `true` when [`status`](Self::status) is 401 or 403 — spec §8.1. That
+    /// `true` when [`status`](Self::status) is 401 or 403. That
     /// covers `Auth`, `PermissionDenied` and a `Download` refused by the
     /// storage with 401 or 403.
     ///
@@ -353,8 +402,8 @@ impl Error {
         self.status() == Some(429)
     }
 
-    /// `true` when [`status`](Self::status) is 400 — spec §8.1, the same in
-    /// every Poli Page SDK. A 422 (an `Error::BadRequest` too) is not a
+    /// `true` when [`status`](Self::status) is 400, the same in every Poli
+    /// Page SDK. A 422 (an `Error::BadRequest` too) is not a
     /// validation error.
     #[must_use]
     pub fn is_validation_error(&self) -> bool {
@@ -368,15 +417,20 @@ impl Error {
         matches!(self, Error::Connection { .. } | Error::Timeout { .. })
     }
 
-    /// `true` when the SDK retries this error (spec §9.1): a network failure,
-    /// a timeout, a 5xx or a 429, except `QUOTA_EXCEEDED`,
-    /// `OVERAGE_CAP_EXCEEDED` and `STORAGE_ACCESS_DENIED`. Never for
-    /// `Aborted`, and never for `Download` (`DOWNLOAD_FAILED`): the
-    /// presigned-URL download is not retried, whatever the storage status.
+    /// `true` when the SDK retries this error: a network failure, a timeout,
+    /// a 5xx or a 429, except `QUOTA_EXCEEDED`, `OVERAGE_CAP_EXCEEDED` and
+    /// `STORAGE_ACCESS_DENIED`. Never for `Aborted`, `InvalidResponse`
+    /// (`invalid_response`) or `Io` (`io_error`), and never for `Download`
+    /// (`DOWNLOAD_FAILED`): the presigned-URL download is not retried,
+    /// whatever the storage status.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
-            Error::Aborted | Error::Download { .. } | Error::InvalidOptions { .. } => false,
+            Error::Aborted
+            | Error::Download { .. }
+            | Error::InvalidResponse { .. }
+            | Error::Io { .. }
+            | Error::InvalidOptions { .. } => false,
             Error::Connection { .. } | Error::Timeout { .. } => true,
             _ => match self.status() {
                 Some(s) if s >= 500 || s == 429 => !NON_RETRYABLE_CODES.contains(&self.code()),
@@ -385,13 +439,15 @@ impl Error {
         }
     }
 
-    /// The human-readable explanation (spec §8.1 `message`), without the
-    /// variant prefix that `Display` adds to API errors. For the SDK-side
-    /// variants it is the exact text of the spec (§8.3): `apiKey is
-    /// required`, `Network request failed`, `Request timed out after <ms>ms`,
-    /// `Request was aborted`, `Failed to download PDF: HTTP <status>` or
-    /// `Failed to download PDF: network error`. For API errors it is the
-    /// body's `detail`, else `title`, else `message`, else `HTTP <status>`.
+    /// The human-readable explanation, without the variant prefix that
+    /// `Display` adds to API errors. For the SDK-side variants it is the
+    /// exact text every Poli Page SDK uses: `apiKey is required`, `Network
+    /// request failed`, `Request timed out after <ms>ms`, `Request was
+    /// aborted`, `Failed to download PDF: HTTP <status>`, `Failed to download
+    /// PDF: network error`, `Failed to download PDF: timeout`, `Invalid
+    /// response: HTTP <status> body is not JSON` or `Failed to write PDF:
+    /// <reason>`. For API errors it is the body's `detail`, else `title`,
+    /// else `message`, else `HTTP <status>`.
     #[must_use]
     pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
@@ -406,15 +462,20 @@ impl Error {
             | Error::Gone { message, .. }
             | Error::RateLimited { message, .. }
             | Error::Api { message, .. } => std::borrow::Cow::Borrowed(message),
-            Error::Timeout { .. } | Error::Aborted => std::borrow::Cow::Owned(self.to_string()),
+            Error::Timeout { .. }
+            | Error::Aborted
+            | Error::InvalidResponse { .. }
+            | Error::Io { .. } => std::borrow::Cow::Owned(self.to_string()),
         }
     }
 
     /// The HTTP status code returned by the upstream API, if one was received.
+    /// For `InvalidResponse` it is the real 2xx status.
     #[must_use]
     pub fn status(&self) -> Option<u16> {
         match self {
-            Error::BadRequest { status, .. }
+            Error::InvalidResponse { status, .. }
+            | Error::BadRequest { status, .. }
             | Error::Auth { status, .. }
             | Error::PermissionDenied { status, .. }
             | Error::NotFound { status, .. }
@@ -425,14 +486,16 @@ impl Error {
             Error::InvalidOptions { .. }
             | Error::Connection { .. }
             | Error::Timeout { .. }
-            | Error::Aborted => None,
+            | Error::Aborted
+            | Error::Io { .. } => None,
         }
     }
 
     /// The wire-level error code. For reserved variants this is a fixed string
     /// (`"invalid_options"`, `"network_error"`, `"timeout"`, `"aborted"`,
-    /// `"DOWNLOAD_FAILED"`, `"INTERNAL_ERROR"`); for API variants it's the
-    /// `code` field returned by the server.
+    /// `"DOWNLOAD_FAILED"`, `"invalid_response"`, `"io_error"`,
+    /// `"INTERNAL_ERROR"`); for API variants it's the `code` field returned
+    /// by the server.
     #[must_use]
     pub fn code(&self) -> &str {
         match self {
@@ -441,6 +504,8 @@ impl Error {
             Error::Timeout { .. } => "timeout",
             Error::Aborted => "aborted",
             Error::Download { .. } => "DOWNLOAD_FAILED",
+            Error::InvalidResponse { .. } => "invalid_response",
+            Error::Io { .. } => "io_error",
             Error::Internal { .. } => "INTERNAL_ERROR",
             Error::BadRequest { code, .. }
             | Error::Auth { code, .. }
@@ -453,11 +518,13 @@ impl Error {
     }
 
     /// The `X-Request-Id` value the server returned with this error, if any.
-    /// Always `None` for SDK-internal variants (no upstream response).
+    /// Always `None` for the other SDK-internal variants (no upstream
+    /// response); `InvalidResponse` keeps the one of the 2xx answer.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         match self {
-            Error::BadRequest { request_id, .. }
+            Error::InvalidResponse { request_id, .. }
+            | Error::BadRequest { request_id, .. }
             | Error::Auth { request_id, .. }
             | Error::PermissionDenied { request_id, .. }
             | Error::NotFound { request_id, .. }
@@ -468,20 +535,22 @@ impl Error {
         }
     }
 
-    /// Returns the canonical wire payload for framework integrations.
+    /// Returns the canonical wire payload for framework integrations: the
+    /// HTTP body an integration answers with.
     ///
-    /// `status` surfaces 503 for `Connection`, 504 for `Timeout`, and the
-    /// API status for status-bearing variants — independent of the
-    /// [`Error::status`] accessor, which keeps returning `None` for
-    /// transport variants so existing callers are unaffected. The
-    /// `message` is [`Error::message`] (the bare reason), not the prefixed
-    /// `Display` form. `status` and `request_id` serialize as `null` when
-    /// unknown.
+    /// `status` surfaces 503 for `Connection`, 504 for `Timeout`, 502 for
+    /// `InvalidResponse`, and the API status for status-bearing variants —
+    /// independent of the [`Error::status`] accessor, which keeps returning
+    /// `None` for transport variants and the real 2xx for `InvalidResponse`.
+    /// The `message` is [`Error::message`] (the bare reason), not the
+    /// prefixed `Display` form. `status` and `request_id` serialize as `null`
+    /// when unknown.
     #[must_use]
     pub fn to_payload(&self) -> ErrorPayload {
         let status = match self {
             Error::Connection { .. } => Some(503),
             Error::Timeout { .. } => Some(504),
+            Error::InvalidResponse { .. } => Some(502),
             _ => self.status(),
         };
         let message = self.message().into_owned();
@@ -494,8 +563,9 @@ impl Error {
     }
 }
 
-/// Canonical wire payload for framework integrations:
-/// `{code, message, status, requestId}` with camelCase JSON keys.
+/// Canonical wire payload for framework integrations: exactly the JSON keys
+/// `code`, `message`, `status` and `requestId`, the same in every Poli Page
+/// SDK.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorPayload {
@@ -509,7 +579,7 @@ pub struct ErrorPayload {
     pub request_id: Option<String>,
 }
 
-/// Wire-level error code constants — see spec §7.4. Pass-through verbatim from
+/// Wire-level error code constants. Pass-through verbatim from
 /// the deployed API; users may still see codes not in this list.
 ///
 /// `STORAGE_REQUIRED` was retired from the API and is intentionally absent.
@@ -1093,6 +1163,121 @@ mod tests {
         assert_eq!(raw["message"], "Request timed out after 60000ms");
         assert_eq!(raw["status"], 504);
         assert!(raw["requestId"].is_null());
+    }
+
+    fn invalid_response() -> Error {
+        Error::InvalidResponse {
+            status: 200,
+            request_id: Some("req_1".into()),
+            source: Some(Box::<dyn std::error::Error + Send + Sync>::from("not json")),
+        }
+    }
+
+    fn io() -> Error {
+        Error::Io {
+            path: "out/invoice.pdf".into(),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Permission denied"),
+        }
+    }
+
+    #[test]
+    fn invalid_response_keeps_its_2xx_and_answers_502_in_the_payload() {
+        let err = invalid_response();
+        assert_eq!(err.code(), "invalid_response");
+        assert_eq!(err.message(), "Invalid response: HTTP 200 body is not JSON");
+        assert_eq!(
+            err.to_string(),
+            "Invalid response: HTTP 200 body is not JSON"
+        );
+        assert_eq!(err.status(), Some(200));
+        assert_eq!(err.request_id(), Some("req_1"));
+        assert!(!err.is_retryable());
+        assert!(!err.is_network_error());
+        assert!(!err.is_auth_error());
+        assert!(!err.is_validation_error());
+        let p = err.to_payload();
+        assert_eq!(p.status, Some(502));
+        assert_eq!(err.status(), Some(200), "to_payload leaves the error alone");
+        let cloned = err.clone();
+        assert_eq!(cloned.status(), Some(200));
+        assert_eq!(cloned.request_id(), Some("req_1"));
+    }
+
+    #[test]
+    fn io_error_has_no_status_and_chains_the_io_error() {
+        use std::error::Error as _;
+        let err = io();
+        assert_eq!(err.code(), "io_error");
+        // The reason names the target, then gives the I/O error's text.
+        let want = format!(
+            "Failed to write PDF: {}: Permission denied",
+            std::path::Path::new("out/invoice.pdf").display()
+        );
+        assert_eq!(err.message(), want);
+        assert_eq!(err.to_string(), want);
+        assert_eq!(err.status(), None);
+        assert_eq!(err.request_id(), None);
+        assert!(!err.is_retryable());
+        assert!(!err.is_network_error());
+        let source = err.source().expect("source");
+        assert_eq!(
+            source
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+        assert_eq!(err.to_payload().status, None);
+        // A clone keeps the kind and the text.
+        let cloned = err.clone();
+        assert_eq!(cloned.message(), err.message());
+        assert!(cloned.source().is_some());
+    }
+
+    #[test]
+    fn download_timeout_is_never_retryable() {
+        let err = Error::Download {
+            message: "Failed to download PDF: timeout".into(),
+            status: None,
+            source: None,
+        };
+        assert!(!err.is_retryable());
+        assert!(!err.is_network_error());
+        assert_eq!(err.to_payload().status, None);
+    }
+
+    #[test]
+    fn to_payload_has_exactly_the_four_keys_for_every_variant() {
+        let all = [
+            Error::InvalidOptions {
+                message: "apiKey is required".into(),
+            },
+            conn(),
+            timeout(),
+            Error::Aborted,
+            download(Some(503)),
+            invalid_response(),
+            io(),
+            Error::Internal {
+                message: "x".into(),
+                status: Some(200),
+            },
+            bad(),
+            auth(),
+            perm(),
+            rate(),
+            api(500),
+        ];
+        for err in &all {
+            let raw = serde_json::to_value(err.to_payload()).expect("serialise payload");
+            let mut keys: Vec<&str> = raw
+                .as_object()
+                .expect("an object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            keys.sort_unstable();
+            assert_eq!(keys, ["code", "message", "requestId", "status"], "{err:?}");
+        }
     }
 
     #[test]
