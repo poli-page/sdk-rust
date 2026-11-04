@@ -7,7 +7,9 @@ use std::pin::Pin;
 use futures_core::Stream;
 use tokio::io::AsyncWriteExt;
 
-use crate::internal::part_file::{io_error, parent_dir, part_path, PartGuard};
+use crate::internal::part_file::{
+    blocking, io_error, keep_permissions, parent_dir, part_path, resolve_target, PartGuard,
+};
 use crate::{Error, PoliPage, RenderInput};
 
 /// Render a PDF and stream the bytes to the given path.
@@ -20,9 +22,10 @@ use crate::{Error, PoliPage, RenderInput};
 /// (`.<name>.<random>.part`), which is renamed over the target only once the
 /// PDF is complete: a call that fails leaves the target as it was (an
 /// existing file keeps its content, a missing one is not created) and
-/// removes the temporary file. The rename replaces the target file itself:
-/// its permissions, owner and hard links are not kept, and a symbolic link
-/// is replaced, not followed. The temporary file is created before the
+/// removes the temporary file. A symbolic link at `path` is resolved first:
+/// the file it points to is replaced and the link stays a link. An existing
+/// file keeps its permissions; its owner and hard links do not survive the
+/// rename, which makes a new file. The temporary file is created before the
 /// render, so a path that cannot be written costs no render.
 ///
 /// `path` accepts anything that implements [`AsRef<Path>`] — `&str`, `&Path`,
@@ -63,11 +66,14 @@ pub async fn render_to_file(
     input: RenderInput,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
-    let target = path.as_ref();
-    if let Some(parent) = parent_dir(target) {
+    let requested = path.as_ref().to_path_buf();
+    let target = blocking(move || resolve_target(&requested))
+        .await
+        .map_err(io_error)?;
+    if let Some(parent) = parent_dir(&target) {
         tokio::fs::create_dir_all(parent).await.map_err(io_error)?;
     }
-    let part_path = part_path(target).map_err(io_error)?;
+    let part_path = part_path(&target).map_err(io_error)?;
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -90,7 +96,11 @@ pub async fn render_to_file(
     file.flush().await.map_err(io_error)?;
     // Wait for every write and close the file before the rename.
     drop(file.into_std().await);
-    tokio::fs::rename(part.path(), target)
+    let (from, to) = (part.path().to_path_buf(), target.clone());
+    blocking(move || keep_permissions(&to, &from))
+        .await
+        .map_err(io_error)?;
+    tokio::fs::rename(part.path(), &target)
         .await
         .map_err(io_error)?;
     part.disarm();

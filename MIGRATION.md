@@ -49,9 +49,12 @@ renamed over the target at the end. A failed call leaves an existing target
 as it was and creates no file; it used to truncate it. Because the target is
 replaced, not rewritten:
 
-- its permissions, owner and hard links are not kept (the new file gets the
-  default permissions for a new file);
-- a symbolic link at the target path is replaced by the file, not followed;
+- a symbolic link at the target path is resolved first: the temporary file
+  goes next to the file it points to, which is replaced, and the link stays
+  a link;
+- an existing file keeps its permission mode, copied onto the new file;
+- its owner and hard links are not kept: the rename makes a new file, owned
+  by the user that runs the call, and other hard links keep the old content;
 - the directory must allow creating a file, not only writing the target;
 - a process killed mid-download can leave a `.part` file behind.
 

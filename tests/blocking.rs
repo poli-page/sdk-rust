@@ -318,3 +318,26 @@ fn blocking_render_to_file_is_io_error_when_the_target_is_a_directory() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     assert_eq!(std::fs::read(target.join("keep.txt")).unwrap(), b"kept");
 }
+
+#[cfg(unix)]
+#[test]
+fn blocking_render_to_file_writes_through_a_symlink_and_keeps_the_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let (server, _rt) = mock_server();
+    let client = client(server.uri());
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real.pdf");
+    std::fs::write(&real, b"the previous PDF").unwrap();
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let link = dir.path().join("out.pdf");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    poli_page::blocking::render_to_file(&client, input(), &link).expect("render_to_file");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read(&real).unwrap(), PDF_STUB);
+    let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode, 0o640);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+}

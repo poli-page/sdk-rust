@@ -63,10 +63,12 @@ crate now shares its major.minor with the Poli Page API (see
   PDF is complete. A failed call (a render error, a broken, short or
   timed-out download, a write error, a dropped future) now leaves an
   existing file as it was and creates no file; it used to truncate the
-  target and could leave a partial PDF. The rename replaces the target file
-  itself: its permissions, owner and hard links are not kept, and a symbolic
-  link is replaced, not followed. The temporary file is created before the
-  render, so a path that cannot be written costs no render.
+  target and could leave a partial PDF. A symbolic link at the target is
+  resolved first: the file it points to is replaced and the link stays a
+  link. An existing file keeps its permission mode, but its owner and hard
+  links do not survive the rename, which makes a new file. The temporary file
+  is created before the render, so a path that cannot be written costs no
+  render.
 - `render.pdf` and `download_pdf()` fail with `DOWNLOAD_FAILED` when the
   download takes longer than `timeout` in all (60 s by default). Use
   `render.pdf_stream` or `render_to_file` for a PDF that takes longer to

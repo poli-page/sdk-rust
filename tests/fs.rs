@@ -319,3 +319,146 @@ async fn render_to_file_leaves_no_temporary_file_on_success() {
         .expect("render_to_file");
     assert_eq!(listing(dir.path()), ["out.pdf"]);
 }
+
+// ---------------------------------------------------------------------------
+// A symbolic link stays a link; an existing file keeps its permissions
+// ---------------------------------------------------------------------------
+
+/// Makes `link` point at `to`. `false` when the platform refuses (Windows
+/// without the symlink privilege or developer mode): the caller skips.
+fn make_symlink(to: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(to, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(to, link);
+    match made {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("skipped: cannot create a symbolic link here: {e}");
+            false
+        }
+    }
+}
+
+#[tokio::test]
+async fn render_to_file_writes_through_a_symlinked_target() {
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let store = dir.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    let real = store.join("real.pdf");
+    std::fs::write(&real, b"the previous PDF").unwrap();
+    let link = dir.path().join("out.pdf");
+    if !make_symlink(&real, &link) {
+        return;
+    }
+    poli_page::render_to_file(&client, input(), &link)
+        .await
+        .expect("render_to_file through a link");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link stays a link"
+    );
+    assert_eq!(std::fs::read_link(&link).unwrap(), real);
+    assert_eq!(std::fs::read(&real).unwrap(), PDF_STUB);
+    // The temporary file went next to the real file, and is gone.
+    assert_eq!(listing(dir.path()), ["out.pdf", "store"]);
+    assert_eq!(listing(&store), ["real.pdf"]);
+}
+
+#[tokio::test]
+async fn render_to_file_failing_through_a_symlink_keeps_the_link_and_the_file() {
+    let server = MockServer::start().await;
+    let presigned = format!("{}/presigned/missing.pdf", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/v1/render"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(descriptor_wire(&presigned)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/presigned/missing.pdf"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let real = dir.path().join("real.pdf");
+    std::fs::write(&real, b"the previous PDF").unwrap();
+    let link = dir.path().join("out.pdf");
+    if !make_symlink(&real, &link) {
+        return;
+    }
+    let err = poli_page::render_to_file(&client, input(), &link)
+        .await
+        .expect_err("download fails");
+    assert_eq!(err.code(), "DOWNLOAD_FAILED");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read(&real).unwrap(), b"the previous PDF");
+    assert_eq!(listing(dir.path()), ["out.pdf", "real.pdf"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_writes_the_file_a_dangling_symlink_names() {
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let link = dir.path().join("out.pdf");
+    std::os::unix::fs::symlink("store/new.pdf", &link).unwrap();
+    poli_page::render_to_file(&client, input(), &link)
+        .await
+        .expect("render_to_file through a dangling link");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        std::fs::read(dir.path().join("store/new.pdf")).unwrap(),
+        PDF_STUB
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_keeps_the_permission_mode_of_an_existing_target() {
+    use std::os::unix::fs::PermissionsExt;
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    for mode in [0o600, 0o640, 0o444] {
+        let target = dir.path().join(format!("out-{mode:o}.pdf"));
+        std::fs::write(&target, b"the previous PDF").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).unwrap();
+        poli_page::render_to_file(&client, input(), &target)
+            .await
+            .expect("render_to_file");
+        assert_eq!(std::fs::read(&target).unwrap(), PDF_STUB);
+        let kept = std::fs::metadata(&target).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(kept, mode, "mode {mode:o}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn control_a_new_target_gets_the_default_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect("render_to_file");
+    // A plain new file: what `File::create` would give under this umask.
+    let control = dir.path().join("control");
+    std::fs::write(&control, b"").unwrap();
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode(&target), mode(&control));
+}

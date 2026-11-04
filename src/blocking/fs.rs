@@ -11,7 +11,9 @@ use futures_core::Stream;
 use tokio::runtime::Runtime;
 
 use crate::client::PdfByteStream;
-use crate::internal::part_file::{io_error, parent_dir, part_path, PartGuard};
+use crate::internal::part_file::{
+    io_error, keep_permissions, parent_dir, part_path, resolve_target, PartGuard,
+};
 use crate::Error;
 use crate::RenderInput;
 
@@ -93,7 +95,8 @@ impl Read for BlockingPdfReader {
 /// Creates parent directories if missing. Streams PDF bytes chunk by chunk —
 /// bounded memory regardless of PDF size — into a temporary file next to the
 /// target, renamed over it once the PDF is complete: a failed call leaves
-/// the target as it was.
+/// the target as it was. A symbolic link is resolved first and stays a link;
+/// an existing file keeps its permissions.
 ///
 /// # Errors
 ///
@@ -105,11 +108,11 @@ pub fn render_to_file(
     input: RenderInput,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
-    let target = path.as_ref();
-    if let Some(parent) = parent_dir(target) {
+    let target = resolve_target(path.as_ref()).map_err(io_error)?;
+    if let Some(parent) = parent_dir(&target) {
         std::fs::create_dir_all(parent).map_err(io_error)?;
     }
-    let part_path = part_path(target).map_err(io_error)?;
+    let part_path = part_path(&target).map_err(io_error)?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -124,7 +127,8 @@ pub fn render_to_file(
     }
     file.flush().map_err(io_error)?;
     drop(file);
-    std::fs::rename(part.path(), target).map_err(io_error)?;
+    keep_permissions(&target, part.path()).map_err(io_error)?;
+    std::fs::rename(part.path(), &target).map_err(io_error)?;
     part.disarm();
     Ok(())
 }
