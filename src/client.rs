@@ -209,9 +209,9 @@ impl ClientInner {
 
     /// Stream the bytes at a presigned URL chunk-by-chunk. Same auth/retry
     /// posture as [`fetch_bytes`](Self::fetch_bytes), but `timeout` is an
-    /// idle timeout: it bounds the wait for the answer's head, then the wait
-    /// for each chunk, not the total, so a large PDF read at the caller's
-    /// pace is not cut off.
+    /// idle timeout: it bounds the wait for the first byte of the body (the
+    /// answer's head included), then each gap between two chunks, not the
+    /// total, so a large PDF read at the caller's pace is not cut off.
     ///
     /// Returns once the response headers arrive (so non-2xx is reported
     /// before any bytes are read); subsequent reads on the returned stream
@@ -221,13 +221,16 @@ impl ClientInner {
         url: &str,
         timeout: Duration,
     ) -> Result<PdfByteStream, Error> {
-        let response = match tokio::time::timeout(timeout, self.start_download(url)).await {
+        // The head and the first byte of the body share one deadline; from
+        // then on, each chunk sets the next one.
+        let first_byte = idle_deadline(timeout);
+        let response = match tokio::time::timeout_at(first_byte, self.start_download(url)).await {
             Ok(result) => result?,
             Err(elapsed) => return Err(download_timeout(Box::new(elapsed))),
         };
         Ok(PdfByteStream {
             inner: Some(Box::pin(response.bytes_stream())),
-            idle: Box::pin(tokio::time::sleep_until(idle_deadline(timeout))),
+            idle: Box::pin(tokio::time::sleep_until(first_byte)),
             timeout,
         })
     }

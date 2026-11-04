@@ -1145,6 +1145,7 @@ fn sdk_error(code: &str, status: u16) -> Option<Error> {
             source: None,
         },
         "io_error" => Error::Io {
+            path: "out.pdf".into(),
             source: std::io::Error::other("disk full"),
         },
         _ => return None,
@@ -1210,7 +1211,7 @@ fn to_payload_matches(policy: PayloadPolicy) -> Result<(), String> {
             .message
             .replace("{status}", "200")
             .replace("{timeoutMs}", "1000")
-            .replace("{reason}", "disk full");
+            .replace("{reason}", "out.pdf: disk full");
         if err.message() != want {
             problems.push(format!("{code}: message {:?}, not {want:?}", err.message()));
         }

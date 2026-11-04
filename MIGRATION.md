@@ -37,8 +37,9 @@ A file `render_to_file` cannot write (a parent directory it cannot create, a
 directory it cannot write to, a target it cannot replace) was
 `Error::InvalidOptions` with a message such as `failed to create file …`. It
 is now `Error::Io`, code `io_error`, message
-`Failed to write PDF: <the std::io::Error's text>`, with the
-`std::io::Error` as `source()` and no status. Match `Error::Io { source }`,
+`Failed to write PDF: <path>: <the std::io::Error's text>` (the path you
+gave), with the `std::io::Error` as `source()` and no status. Match
+`Error::Io { path, source }`,
 or `err.code() == "io_error"`, where you matched `InvalidOptions` from
 `render_to_file`.
 
@@ -53,8 +54,11 @@ replaced, not rewritten:
   goes next to the file it points to, which is replaced, and the link stays
   a link;
 - an existing file keeps its permission mode, copied onto the new file;
-- an existing file that may not be written (read-only) is refused with
-  `io_error` before the render, and left as it is;
+- an existing path that is not a regular file (a directory, a FIFO, a
+  device, a socket) is refused with `io_error`
+  (`Failed to write PDF: <path>: not a regular file`) before the render, and
+  so is a file that may not be written (read-only); both are left as they
+  are;
 - its owner and hard links are not kept: the rename makes a new file, owned
   by the user that runs the call, and other hard links keep the old content;
 - the directory must allow creating a file, not only writing the target;

@@ -941,6 +941,7 @@ dependencies = [
  "regex",
  "reqwest",
  "ring",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

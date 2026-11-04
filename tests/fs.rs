@@ -1,6 +1,7 @@
 //! `render_to_file` end-to-end test against a wiremock server.
 
 use std::error::Error as _;
+use std::path::Path;
 use std::time::Duration;
 
 use poli_page::{PoliPage, RenderInput};
@@ -162,7 +163,19 @@ fn listing(dir: &std::path::Path) -> Vec<String> {
     names
 }
 
-fn assert_io_error(err: &poli_page::Error) {
+/// A test that cannot run here (root, no symlink privilege). In CI it fails
+/// instead, so a skip never reads as a pass.
+fn skip(reason: &str) {
+    assert!(
+        std::env::var("CI").map_or(true, |v| v.is_empty()),
+        "cannot run in CI: {reason}"
+    );
+    eprintln!("skipped: {reason}");
+}
+
+/// `io_error` for `target`, the path given to `render_to_file`: the
+/// message names it, then gives the I/O error's text.
+fn assert_io_error(err: &poli_page::Error, target: &std::path::Path) {
     assert!(matches!(err, poli_page::Error::Io { .. }), "{err:?}");
     assert_eq!(err.code(), "io_error");
     assert_eq!(err.status(), None);
@@ -174,7 +187,11 @@ fn assert_io_error(err: &poli_page::Error) {
         .source()
         .and_then(|s| s.downcast_ref::<std::io::Error>())
         .expect("the io::Error is the source");
-    assert_eq!(err.message(), format!("Failed to write PDF: {source}"));
+    assert_eq!(
+        err.message(),
+        format!("Failed to write PDF: {}: {source}", target.display())
+    );
+    assert!(!err.message().contains(".part"), "{err}");
     assert_eq!(err.to_string(), err.message());
     let payload = serde_json::to_value(err.to_payload()).expect("payload");
     assert_eq!(payload["code"], "io_error");
@@ -204,31 +221,71 @@ async fn render_to_file_is_io_error_when_a_parent_directory_cannot_be_created() 
     let dir = tempdir().unwrap();
     // A file where a parent directory should be.
     std::fs::write(dir.path().join("taken"), b"a file").unwrap();
-    let err = poli_page::render_to_file(&client, input(), dir.path().join("taken/out.pdf"))
+    let target = dir.path().join("taken/out.pdf");
+    let err = poli_page::render_to_file(&client, input(), &target)
         .await
         .expect_err("parent is a file");
-    assert_io_error(&err);
+    assert_io_error(&err, &target);
     // Checked before the render: nothing was rendered.
     assert!(server.received_requests().await.unwrap().is_empty());
     assert_eq!(listing(dir.path()), ["taken"]);
 }
 
+/// `io_error` `not a regular file`, refused before any API call.
+async fn assert_not_a_regular_file(server: &MockServer, err: &poli_page::Error, target: &Path) {
+    assert_io_error(err, target);
+    assert_eq!(
+        err.message(),
+        format!(
+            "Failed to write PDF: {}: not a regular file",
+            target.display()
+        )
+    );
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "no API call"
+    );
+}
+
 #[tokio::test]
-async fn render_to_file_is_io_error_when_the_target_cannot_be_replaced() {
+async fn render_to_file_refuses_a_directory_target_before_rendering() {
     let server = counted_servers().await;
     let client = client_for(&server).await;
     let dir = tempdir().unwrap();
-    // A non-empty directory at the target path: the final rename fails on
-    // every platform.
     let target = dir.path().join("out.pdf");
     std::fs::create_dir(&target).unwrap();
     std::fs::write(target.join("keep.txt"), b"kept").unwrap();
     let err = poli_page::render_to_file(&client, input(), &target)
         .await
         .expect_err("target is a directory");
-    assert_io_error(&err);
+    assert_not_a_regular_file(&server, &err, &target).await;
     assert_eq!(listing(dir.path()), ["out.pdf"], "no temporary file left");
     assert_eq!(std::fs::read(target.join("keep.txt")).unwrap(), b"kept");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_refuses_a_fifo_target_before_rendering() {
+    use std::os::unix::fs::FileTypeExt;
+    let server = counted_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&target)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo failed");
+    // Never opened: an open of a FIFO with no reader would block.
+    let err = poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect_err("target is a FIFO");
+    assert_not_a_regular_file(&server, &err, &target).await;
+    assert!(std::fs::symlink_metadata(&target)
+        .unwrap()
+        .file_type()
+        .is_fifo());
+    assert_eq!(listing(dir.path()), ["out.pdf"]);
 }
 
 #[cfg(unix)]
@@ -246,13 +303,13 @@ async fn render_to_file_is_io_error_when_the_directory_is_read_only() {
     if std::fs::write(&probe, b"").is_ok() {
         std::fs::remove_file(&probe).unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        eprintln!("skipped: this user can write to a read-only directory");
+        skip("this user can write to a read-only directory");
         return;
     }
     let result = poli_page::render_to_file(&client, input(), &target).await;
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     let err = result.expect_err("read-only directory");
-    assert_io_error(&err);
+    assert_io_error(&err, &target);
     assert_eq!(
         err.source()
             .and_then(|s| s.downcast_ref::<std::io::Error>())
@@ -334,7 +391,7 @@ fn make_symlink(to: &std::path::Path, link: &std::path::Path) -> bool {
     match made {
         Ok(()) => true,
         Err(e) => {
-            eprintln!("skipped: cannot create a symbolic link here: {e}");
+            skip(&format!("cannot create a symbolic link here: {e}"));
             false
         }
     }
@@ -479,13 +536,13 @@ async fn render_to_file_refuses_a_read_only_target_before_rendering() {
         .open(&target)
         .is_ok()
     {
-        eprintln!("skipped: this user can write a read-only file");
+        skip("this user can write a read-only file");
         return;
     }
     let err = poli_page::render_to_file(&client, input(), &target)
         .await
         .expect_err("read-only target");
-    assert_io_error(&err);
+    assert_io_error(&err, &target);
     assert_eq!(
         err.source()
             .and_then(|s| s.downcast_ref::<std::io::Error>())

@@ -52,6 +52,12 @@ enum Act {
         declared: usize,
         pieces: Vec<(Duration, Vec<u8>)>,
     },
+    /// The head after `head_after`, then the whole body `body_after` later.
+    Late {
+        head_after: Duration,
+        body_after: Duration,
+        body: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +177,29 @@ async fn serve(
                     }
                 }
                 std::future::pending::<()>().await;
+            }
+            Act::Late {
+                head_after,
+                body_after,
+                body,
+            } => {
+                tokio::time::sleep(head_after).await;
+                let head = head(
+                    200,
+                    &[("content-type", "application/pdf".into())],
+                    body.len(),
+                );
+                if stream.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                // The head goes out on its own before the body waits.
+                if stream.flush().await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(body_after).await;
+                if stream.write_all(&body).await.is_err() {
+                    return;
+                }
             }
             Act::Trickle { declared, pieces } => {
                 let head = head(200, &[("content-type", "application/pdf".into())], declared);
@@ -838,4 +867,44 @@ async fn render_to_file_dropped_mid_download_leaves_no_temporary_file() {
     let gave_up = tokio::time::timeout(Duration::from_millis(300), call).await;
     assert!(gave_up.is_err(), "the call was still running");
     assert!(listing(dir.path()).is_empty(), "{:?}", listing(dir.path()));
+}
+
+#[tokio::test]
+async fn pdf_stream_head_and_first_byte_share_one_timeout() {
+    // Each wait stays under the timeout; together they exceed it.
+    let server = pdf_storage(Act::Late {
+        head_after: Duration::from_millis(300),
+        body_after: Duration::from_millis(300),
+        body: b"%PDF-1.4".to_vec(),
+    })
+    .await;
+    let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+    let (failure, _) = bounded("late head and late first byte", async {
+        match client.render.pdf_stream(input()).await {
+            // A slow runner can push the head itself past the deadline.
+            Err(e) => Some(e),
+            Ok(stream) => {
+                let (data, failure) = drain(stream).await;
+                assert!(data.is_empty(), "no byte before the deadline: {data:?}");
+                failure
+            }
+        }
+    })
+    .await;
+    assert_download_timeout(&failure.expect("timeout"));
+}
+
+#[tokio::test]
+async fn control_a_late_head_then_a_prompt_body_streams_in_full() {
+    let server = pdf_storage(Act::Late {
+        head_after: Duration::from_millis(100),
+        body_after: Duration::from_millis(20),
+        body: b"%PDF-1.4".to_vec(),
+    })
+    .await;
+    let (client, _) = client(&server.origin, 0, DOWNLOAD_TIMEOUT);
+    let stream = client.render.pdf_stream(input()).await.expect("head");
+    let (data, failure) = drain(stream).await;
+    assert!(failure.is_none(), "{failure:?}");
+    assert_eq!(data, b"%PDF-1.4");
 }

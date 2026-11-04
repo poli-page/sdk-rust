@@ -93,12 +93,15 @@ pub enum Error {
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
-    /// [`crate::render_to_file`] could not write the file: creating a parent
-    /// directory, creating, writing or renaming the temporary file. Never
+    /// [`crate::render_to_file`] could not write the file: the target is not
+    /// a regular file or may not be written, or creating a parent directory,
+    /// creating, writing or renaming the temporary file failed. Never
     /// retried, no status. The target file is left as it was. Displays as
-    /// `Failed to write PDF: <the I/O error's own text>`.
-    #[error("Failed to write PDF: {source}")]
+    /// `Failed to write PDF: <path>: <the I/O error's own text>`.
+    #[error("Failed to write PDF: {}: {source}", .path.display())]
     Io {
+        /// The path the caller gave `render_to_file`.
+        path: std::path::PathBuf,
         /// The I/O error.
         #[source]
         source: std::io::Error,
@@ -286,7 +289,8 @@ impl Clone for Error {
                 request_id: request_id.clone(),
                 source: None,
             },
-            Error::Io { source } => Error::Io {
+            Error::Io { path, source } => Error::Io {
+                path: path.clone(),
                 source: std::io::Error::new(source.kind(), source.to_string()),
             },
             Error::Internal { message, status } => Error::Internal {
@@ -1171,6 +1175,7 @@ mod tests {
 
     fn io() -> Error {
         Error::Io {
+            path: "out/invoice.pdf".into(),
             source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Permission denied"),
         }
     }
@@ -1203,8 +1208,13 @@ mod tests {
         use std::error::Error as _;
         let err = io();
         assert_eq!(err.code(), "io_error");
-        assert_eq!(err.message(), "Failed to write PDF: Permission denied");
-        assert_eq!(err.to_string(), "Failed to write PDF: Permission denied");
+        // The reason names the target, then gives the I/O error's text.
+        let want = format!(
+            "Failed to write PDF: {}: Permission denied",
+            std::path::Path::new("out/invoice.pdf").display()
+        );
+        assert_eq!(err.message(), want);
+        assert_eq!(err.to_string(), want);
         assert_eq!(err.status(), None);
         assert_eq!(err.request_id(), None);
         assert!(!err.is_retryable());

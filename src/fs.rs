@@ -25,20 +25,23 @@ use crate::{Error, PoliPage, RenderInput};
 /// removes the temporary file. A symbolic link at `path` is resolved first:
 /// the file it points to is replaced and the link stays a link. An existing
 /// file keeps its permissions; its owner and hard links do not survive the
-/// rename, which makes a new file. An existing file this process may not
-/// write (read-only) is refused with `io_error` and left as it is. These
-/// checks and the temporary file come before the render, so a path that
-/// cannot be written costs no render.
+/// rename, which makes a new file. An existing path that is not a regular
+/// file (a directory, a FIFO, a device, a socket), or a file this process
+/// may not write (read-only), is refused with `io_error` and left as it is.
+/// These checks, made from the file's metadata, and the temporary file come
+/// before the render, so a path that cannot be written costs no render.
 ///
 /// `path` accepts anything that implements [`AsRef<Path>`] — `&str`, `&Path`,
 /// `PathBuf`, etc.
 ///
 /// # Errors
 ///
-/// - [`Error::Io`] (`io_error`, `Failed to write PDF: <reason>`, no status,
-///   never retried) when the file cannot be written: a read-only target,
-///   creating a parent directory, creating or writing the temporary file, or
-///   renaming it over the target. The I/O error is the `source()`.
+/// - [`Error::Io`] (`io_error`, `Failed to write PDF: <path>: <reason>`,
+///   `<path>` as given, no status, never retried) when the file cannot be
+///   written: a target that is not a regular file (`not a regular file`) or
+///   is read-only, or creating a parent directory, creating or writing the
+///   temporary file, or renaming it over the target failed. The I/O error is
+///   the `source()`.
 /// - Any error variant [`crate::Render::pdf_stream`] returns: the first-hop
 ///   `POST /v1/render` family, or a [`Error::Download`] on the second-hop
 ///   presigned-URL fetch.
@@ -68,20 +71,23 @@ pub async fn render_to_file(
     input: RenderInput,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
-    let requested = path.as_ref().to_path_buf();
-    let target = blocking(move || prepare_target(&requested))
+    let requested = path.as_ref();
+    // Every write failure names the path the caller gave.
+    let fail = |e| io_error(requested, e);
+    let given = requested.to_path_buf();
+    let target = blocking(move || prepare_target(&given))
         .await
-        .map_err(io_error)?;
+        .map_err(fail)?;
     if let Some(parent) = parent_dir(&target) {
-        tokio::fs::create_dir_all(parent).await.map_err(io_error)?;
+        tokio::fs::create_dir_all(parent).await.map_err(fail)?;
     }
-    let part_path = part_path(&target).map_err(io_error)?;
+    let part_path = part_path(&target).map_err(fail)?;
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&part_path)
         .await
-        .map_err(io_error)?;
+        .map_err(fail)?;
     // Removes the temporary file on every early return (and if this future
     // is dropped). Rust opens files with delete sharing on Windows, so the
     // removal works while `file` is still open.
@@ -93,18 +99,18 @@ pub async fn render_to_file(
     // need to depend on `futures_util::StreamExt` (it's a dev-dependency).
     while let Some(chunk) = poll_fn(|cx| poll_next_pin(&mut stream, cx)).await {
         let chunk = chunk?;
-        file.write_all(&chunk).await.map_err(io_error)?;
+        file.write_all(&chunk).await.map_err(fail)?;
     }
-    file.flush().await.map_err(io_error)?;
+    file.flush().await.map_err(fail)?;
     // Wait for every write and close the file before the rename.
     drop(file.into_std().await);
     let (from, to) = (part.path().to_path_buf(), target.clone());
     blocking(move || keep_permissions(&to, &from))
         .await
-        .map_err(io_error)?;
+        .map_err(fail)?;
     tokio::fs::rename(part.path(), &target)
         .await
-        .map_err(io_error)?;
+        .map_err(fail)?;
     part.disarm();
     Ok(())
 }

@@ -303,7 +303,7 @@ fn blocking_pdf_times_out_on_the_download() {
 
 #[test]
 fn blocking_render_to_file_is_io_error_when_the_target_is_a_directory() {
-    let (server, _rt) = mock_server();
+    let (server, rt) = mock_server();
     let client = client(server.uri());
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("out.pdf");
@@ -312,8 +312,16 @@ fn blocking_render_to_file_is_io_error_when_the_target_is_a_directory() {
     let err = poli_page::blocking::render_to_file(&client, input(), &target)
         .expect_err("target is a directory");
     assert_eq!(err.code(), "io_error", "{err:?}");
-    assert!(err.message().starts_with("Failed to write PDF: "), "{err}");
+    assert_eq!(
+        err.message(),
+        format!(
+            "Failed to write PDF: {}: not a regular file",
+            target.display()
+        )
+    );
     assert_eq!(err.status(), None);
+    let requests = rt.block_on(server.received_requests()).unwrap();
+    assert!(requests.is_empty(), "refused before any API call");
     assert!(std::error::Error::source(&err).is_some());
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     assert_eq!(std::fs::read(target.join("keep.txt")).unwrap(), b"kept");

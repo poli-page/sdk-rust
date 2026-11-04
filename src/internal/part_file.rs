@@ -15,10 +15,14 @@ use std::path::{Path, PathBuf};
 use crate::internal::uuid::new_v4_string;
 use crate::Error;
 
-/// `io_error`: the file could not be written. The I/O error's own text is
-/// the reason, and the error itself the `source()`.
-pub(crate) fn io_error(source: io::Error) -> Error {
-    Error::Io { source }
+/// `io_error`: the file at `path` (the path the caller gave, never the
+/// temporary file) could not be written. The reason is the path and the I/O
+/// error's own text; the error itself is the `source()`.
+pub(crate) fn io_error(path: &Path, source: io::Error) -> Error {
+    Error::Io {
+        path: path.to_path_buf(),
+        source,
+    }
 }
 
 /// Links followed before giving up, as Linux's `ELOOP` limit.
@@ -69,28 +73,46 @@ fn follow_dangling(link: &Path) -> io::Result<PathBuf> {
             _ => return Ok(current),
         }
     }
-    Err(io::Error::other(format!(
-        "{}: too many levels of symbolic links",
-        link.display()
-    )))
+    Err(io::Error::other("too many levels of symbolic links"))
 }
 
-/// Fails when `target` is an existing file this process may not write, so a
-/// read-only file is refused before any render and never replaced. Opening
-/// it for writing, without truncating, changes nothing.
+/// Refuses, from its metadata alone, an existing `target` that is not a
+/// regular file (a directory, a FIFO, a device, a socket) or that this
+/// process may not write. The file is never opened: opening a FIFO blocks,
+/// and an open is seen by file watchers and by Windows sharing modes.
 pub(crate) fn ensure_writable(target: &Path) -> io::Result<()> {
-    match std::fs::metadata(target) {
-        Ok(meta) if meta.is_file() => std::fs::OpenOptions::new()
-            .write(true)
-            .open(target)
-            .map(drop),
-        _ => Ok(()),
+    let meta = match std::fs::metadata(target) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if !meta.is_file() {
+        return Err(io::Error::other("not a regular file"));
     }
+    may_write(target, &meta)
+}
+
+/// `access(W_OK)`: the OS's own answer for this process, root included.
+#[cfg(unix)]
+fn may_write(target: &Path, _meta: &std::fs::Metadata) -> io::Result<()> {
+    rustix::fs::access(target, rustix::fs::Access::WRITE_OK).map_err(io::Error::from)
+}
+
+/// The read-only attribute, which the rename would also run into.
+#[cfg(not(unix))]
+fn may_write(_target: &Path, meta: &std::fs::Metadata) -> io::Result<()> {
+    if meta.permissions().readonly() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the file is read-only",
+        ));
+    }
+    Ok(())
 }
 
 /// The file to write for the path the caller gave: its symbolic links
-/// resolved, and refused when it is an existing file that may not be
-/// written.
+/// resolved, and refused when it exists but is not a regular file this
+/// process may write.
 pub(crate) fn prepare_target(path: &Path) -> io::Result<PathBuf> {
     let target = resolve_target(path)?;
     ensure_writable(&target)?;
@@ -125,12 +147,9 @@ pub(crate) fn parent_dir(target: &Path) -> Option<&Path> {
 /// `.<name>.<uuid>.part` next to `target`: in the same directory, so the
 /// final rename stays on one filesystem.
 pub(crate) fn part_path(target: &Path) -> io::Result<PathBuf> {
-    let name = target.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{} has no file name", target.display()),
-        )
-    })?;
+    let name = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
     let mut part = OsString::from(".");
     part.push(name);
     part.push(format!(".{}.part", new_v4_string()));
@@ -195,12 +214,9 @@ mod tests {
     fn part_path_needs_a_file_name() {
         let err = part_path(Path::new("out/..")).expect_err("no file name");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        let err = io_error(err);
+        let err = io_error(Path::new("out/.."), err);
         assert_eq!(err.code(), "io_error");
-        assert_eq!(
-            err.message(),
-            "Failed to write PDF: out/.. has no file name"
-        );
+        assert_eq!(err.message(), "Failed to write PDF: out/..: no file name");
     }
 
     #[test]

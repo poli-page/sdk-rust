@@ -108,27 +108,30 @@ pub fn render_to_file(
     input: RenderInput,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
-    let target = prepare_target(path.as_ref()).map_err(io_error)?;
+    let requested = path.as_ref();
+    // Every write failure names the path the caller gave.
+    let fail = |e| io_error(requested, e);
+    let target = prepare_target(requested).map_err(fail)?;
     if let Some(parent) = parent_dir(&target) {
-        std::fs::create_dir_all(parent).map_err(io_error)?;
+        std::fs::create_dir_all(parent).map_err(fail)?;
     }
-    let part_path = part_path(&target).map_err(io_error)?;
+    let part_path = part_path(&target).map_err(fail)?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&part_path)
-        .map_err(io_error)?;
+        .map_err(fail)?;
     // Removes the temporary file on every early return.
     let part = PartGuard::new(part_path);
 
     let mut reader = client.render.pdf_stream(input)?;
     while let Some(chunk) = reader.next_chunk() {
-        file.write_all(&chunk?).map_err(io_error)?;
+        file.write_all(&chunk?).map_err(fail)?;
     }
-    file.flush().map_err(io_error)?;
+    file.flush().map_err(fail)?;
     drop(file);
-    keep_permissions(&target, part.path()).map_err(io_error)?;
-    std::fs::rename(part.path(), &target).map_err(io_error)?;
+    keep_permissions(&target, part.path()).map_err(fail)?;
+    std::fs::rename(part.path(), &target).map_err(fail)?;
     part.disarm();
     Ok(())
 }
