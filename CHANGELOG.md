@@ -66,9 +66,10 @@ crate now shares its major.minor with the Poli Page API (see
   target and could leave a partial PDF. A symbolic link at the target is
   resolved first: the file it points to is replaced and the link stays a
   link. An existing file keeps its permission mode, but its owner and hard
-  links do not survive the rename, which makes a new file. The temporary file
-  is created before the render, so a path that cannot be written costs no
-  render.
+  links do not survive the rename, which makes a new file. An existing file
+  that may not be written (read-only) is refused with `io_error` and left as
+  it is. These checks and the temporary file come before the render, so a
+  path that cannot be written costs no render.
 - `render.pdf` and `download_pdf()` fail with `DOWNLOAD_FAILED` when the
   download takes longer than `timeout` in all (60 s by default). Use
   `render.pdf_stream` or `render_to_file` for a PDF that takes longer to

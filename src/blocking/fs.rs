@@ -12,7 +12,7 @@ use tokio::runtime::Runtime;
 
 use crate::client::PdfByteStream;
 use crate::internal::part_file::{
-    io_error, keep_permissions, parent_dir, part_path, resolve_target, PartGuard,
+    io_error, keep_permissions, parent_dir, part_path, prepare_target, PartGuard,
 };
 use crate::Error;
 use crate::RenderInput;
@@ -108,7 +108,7 @@ pub fn render_to_file(
     input: RenderInput,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
-    let target = resolve_target(path.as_ref()).map_err(io_error)?;
+    let target = prepare_target(path.as_ref()).map_err(io_error)?;
     if let Some(parent) = parent_dir(&target) {
         std::fs::create_dir_all(parent).map_err(io_error)?;
     }

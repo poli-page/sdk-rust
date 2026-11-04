@@ -94,7 +94,7 @@ poli_page::render_to_file(
 # Ok(()) }
 ```
 
-`render_to_file` streams response bytes directly to disk (bounded memory). It creates parent directories if missing and writes to a temporary file next to the target (`.<name>.<random>.part`), renamed over the target once the PDF is complete: a failed call leaves an existing file as it was and creates no file. A symbolic link at the target is resolved first, so the file it points to is replaced and the link stays a link. An existing file keeps its permission mode; its owner and hard links do not survive the rename, which makes a new file. When the file cannot be written, the error is `io_error` (`Failed to write PDF: <reason>`, the `std::io::Error` as `source()`).
+`render_to_file` streams response bytes directly to disk (bounded memory). It creates parent directories if missing and writes to a temporary file next to the target (`.<name>.<random>.part`), renamed over the target once the PDF is complete: a failed call leaves an existing file as it was and creates no file. A symbolic link at the target is resolved first, so the file it points to is replaced and the link stays a link. An existing file keeps its permission mode; its owner and hard links do not survive the rename, which makes a new file. A read-only target is refused with `io_error` before the render and left as it is. When the file cannot be written, the error is `io_error` (`Failed to write PDF: <reason>`, the `std::io::Error` as `source()`).
 
 #### Stream — for large PDFs or piping to S3 / HTTP responses
 

@@ -432,7 +432,7 @@ async fn render_to_file_keeps_the_permission_mode_of_an_existing_target() {
     let (server, _) = make_servers().await;
     let client = client_for(&server).await;
     let dir = tempdir().unwrap();
-    for mode in [0o600, 0o640, 0o444] {
+    for mode in [0o600, 0o640, 0o604] {
         let target = dir.path().join(format!("out-{mode:o}.pdf"));
         std::fs::write(&target, b"the previous PDF").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).unwrap();
@@ -461,4 +461,77 @@ async fn control_a_new_target_gets_the_default_mode() {
     std::fs::write(&control, b"").unwrap();
     let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
     assert_eq!(mode(&target), mode(&control));
+}
+
+#[tokio::test]
+async fn render_to_file_refuses_a_read_only_target_before_rendering() {
+    let server = counted_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("out.pdf");
+    std::fs::write(&target, b"the previous PDF").unwrap();
+    let mut read_only = std::fs::metadata(&target).unwrap().permissions();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&target, read_only).unwrap();
+    // Root writes a read-only file anyway: nothing to check then.
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open(&target)
+        .is_ok()
+    {
+        eprintln!("skipped: this user can write a read-only file");
+        return;
+    }
+    let err = poli_page::render_to_file(&client, input(), &target)
+        .await
+        .expect_err("read-only target");
+    assert_io_error(&err);
+    assert_eq!(
+        err.source()
+            .and_then(|s| s.downcast_ref::<std::io::Error>())
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "no API call"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), b"the previous PDF");
+    assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
+    assert_eq!(listing(dir.path()), ["out.pdf"]);
+    // Let the temporary directory be removed on every platform.
+    let mut writable = std::fs::metadata(&target).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    writable.set_readonly(false);
+    std::fs::set_permissions(&target, writable).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn render_to_file_reads_a_relative_hop_from_the_links_real_directory() {
+    use std::os::unix::fs::symlink;
+    let (server, _) = make_servers().await;
+    let client = client_for(&server).await;
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("real/dir")).unwrap();
+    symlink(root.join("real/dir"), root.join("sym")).unwrap();
+    symlink("../a.pdf", root.join("real/dir/link")).unwrap();
+    // Dangling first (`real/a.pdf` is created), then existing (replaced).
+    for round in ["dangling", "existing"] {
+        poli_page::render_to_file(&client, input(), root.join("sym/link"))
+            .await
+            .expect(round);
+        assert_eq!(
+            std::fs::read(root.join("real/a.pdf")).unwrap(),
+            PDF_STUB,
+            "{round}"
+        );
+        assert!(!root.join("a.pdf").exists(), "{round}: not next to `sym`");
+        assert!(std::fs::symlink_metadata(root.join("real/dir/link"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(listing(&root.join("real")), ["a.pdf", "dir"], "{round}");
+    }
 }

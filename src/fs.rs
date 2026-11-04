@@ -8,7 +8,7 @@ use futures_core::Stream;
 use tokio::io::AsyncWriteExt;
 
 use crate::internal::part_file::{
-    blocking, io_error, keep_permissions, parent_dir, part_path, resolve_target, PartGuard,
+    blocking, io_error, keep_permissions, parent_dir, part_path, prepare_target, PartGuard,
 };
 use crate::{Error, PoliPage, RenderInput};
 
@@ -25,8 +25,10 @@ use crate::{Error, PoliPage, RenderInput};
 /// removes the temporary file. A symbolic link at `path` is resolved first:
 /// the file it points to is replaced and the link stays a link. An existing
 /// file keeps its permissions; its owner and hard links do not survive the
-/// rename, which makes a new file. The temporary file is created before the
-/// render, so a path that cannot be written costs no render.
+/// rename, which makes a new file. An existing file this process may not
+/// write (read-only) is refused with `io_error` and left as it is. These
+/// checks and the temporary file come before the render, so a path that
+/// cannot be written costs no render.
 ///
 /// `path` accepts anything that implements [`AsRef<Path>`] — `&str`, `&Path`,
 /// `PathBuf`, etc.
@@ -34,9 +36,9 @@ use crate::{Error, PoliPage, RenderInput};
 /// # Errors
 ///
 /// - [`Error::Io`] (`io_error`, `Failed to write PDF: <reason>`, no status,
-///   never retried) when the file cannot be written: creating a parent
-///   directory, creating or writing the temporary file, or renaming it over
-///   the target. The I/O error is the `source()`.
+///   never retried) when the file cannot be written: a read-only target,
+///   creating a parent directory, creating or writing the temporary file, or
+///   renaming it over the target. The I/O error is the `source()`.
 /// - Any error variant [`crate::Render::pdf_stream`] returns: the first-hop
 ///   `POST /v1/render` family, or a [`Error::Download`] on the second-hop
 ///   presigned-URL fetch.
@@ -67,7 +69,7 @@ pub async fn render_to_file(
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
     let requested = path.as_ref().to_path_buf();
-    let target = blocking(move || resolve_target(&requested))
+    let target = blocking(move || prepare_target(&requested))
         .await
         .map_err(io_error)?;
     if let Some(parent) = parent_dir(&target) {

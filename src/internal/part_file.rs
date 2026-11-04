@@ -41,15 +41,29 @@ pub(crate) fn resolve_target(target: &Path) -> io::Result<PathBuf> {
 }
 
 /// Follows the links from `link` to the first path that is not one, without
-/// requiring it to exist.
+/// requiring it to exist. A relative link is read from the link's real
+/// directory, as the OS does: `..` in it climbs from there, not from the
+/// path as written, which may itself go through a link.
 fn follow_dangling(link: &Path) -> io::Result<PathBuf> {
     let mut current = link.to_path_buf();
     for _ in 0..MAX_LINKS {
         let next = std::fs::read_link(&current)?;
-        current = match current.parent() {
-            Some(dir) if next.is_relative() => dir.join(next),
-            _ => next,
+        current = if next.is_relative() {
+            let dir = match current.parent() {
+                Some(dir) if !dir.as_os_str().is_empty() => dir,
+                _ => Path::new("."),
+            };
+            std::fs::canonicalize(dir)?.join(next)
+        } else {
+            next
         };
+        // Spell the result through its real directory when that exists,
+        // so the `..` of the link is resolved the way the OS does.
+        if let (Some(dir), Some(name)) = (current.parent(), current.file_name()) {
+            if let Ok(real_dir) = std::fs::canonicalize(dir) {
+                current = real_dir.join(name);
+            }
+        }
         match std::fs::symlink_metadata(&current) {
             Ok(meta) if meta.file_type().is_symlink() => {}
             _ => return Ok(current),
@@ -59,6 +73,28 @@ fn follow_dangling(link: &Path) -> io::Result<PathBuf> {
         "{}: too many levels of symbolic links",
         link.display()
     )))
+}
+
+/// Fails when `target` is an existing file this process may not write, so a
+/// read-only file is refused before any render and never replaced. Opening
+/// it for writing, without truncating, changes nothing.
+pub(crate) fn ensure_writable(target: &Path) -> io::Result<()> {
+    match std::fs::metadata(target) {
+        Ok(meta) if meta.is_file() => std::fs::OpenOptions::new()
+            .write(true)
+            .open(target)
+            .map(drop),
+        _ => Ok(()),
+    }
+}
+
+/// The file to write for the path the caller gave: its symbolic links
+/// resolved, and refused when it is an existing file that may not be
+/// written.
+pub(crate) fn prepare_target(path: &Path) -> io::Result<PathBuf> {
+    let target = resolve_target(path)?;
+    ensure_writable(&target)?;
+    Ok(target)
 }
 
 /// Gives the temporary file `part` the permissions of the existing file at
@@ -197,6 +233,22 @@ mod tests {
         assert_eq!(
             resolve_target(&root.join("dangling.pdf")).unwrap(),
             root.join("store/next.pdf")
+        );
+        // A relative hop climbs from the link's real directory: through
+        // `sym -> real/dir`, `sym/link -> ../a.pdf` names `real/a.pdf`.
+        std::fs::create_dir_all(root.join("real/dir")).unwrap();
+        symlink(root.join("real/dir"), root.join("sym")).unwrap();
+        symlink("../a.pdf", root.join("real/dir/link")).unwrap();
+        assert_eq!(
+            resolve_target(&root.join("sym/link")).unwrap(),
+            root.join("real/a.pdf"),
+            "dangling"
+        );
+        std::fs::write(root.join("real/a.pdf"), b"x").unwrap();
+        assert_eq!(
+            resolve_target(&root.join("sym/link")).unwrap(),
+            root.join("real/a.pdf"),
+            "existing"
         );
         // A loop is an error, not a hang.
         symlink("loop-b", root.join("loop-a")).unwrap();
