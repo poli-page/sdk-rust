@@ -8,6 +8,10 @@ Breaking changes and their upgrade path are summarized in [MIGRATION.md](MIGRATI
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-05
+
+Licensed under MIT only; 0.13.0 and earlier stay available under MIT OR Apache-2.0.
+
 ### Changed
 
 - The crate is now licensed under MIT only (it was `MIT OR Apache-2.0`). Versions already published on crates.io stay available under `MIT OR Apache-2.0`.
