@@ -40,7 +40,7 @@ use tokio::sync::Notify;
 // Contract format 1 (README of poli-page/api-contract)
 // ---------------------------------------------------------------------------
 
-const KNOWN_FORMAT_VERSION: u64 = 1;
+const KNOWN_FORMAT_VERSION: u64 = 2;
 
 /// This SDK's name in `policy.cancellationSdks`.
 const SDK_NAME: &str = "rust";
@@ -129,6 +129,9 @@ struct Expect {
     requests: Vec<Value>,
     events: Vec<Value>,
     result: Value,
+    /// Lower bound on the whole call's duration (formatVersion 2).
+    #[serde(rename = "minCallMs")]
+    min_call_ms: Option<u64>,
 }
 
 fn load_contract(path: &str) -> Result<Contract, String> {
@@ -882,6 +885,7 @@ async fn run_case(c: &SdkCase) -> Result<(), String> {
             })
             .build()
     };
+    let mut call_duration = Duration::ZERO;
     let result = match built {
         Err(e) => Err(e),
         // A stopped call is abandoned: dropping its future cancels it. The
@@ -898,11 +902,17 @@ async fn run_case(c: &SdkCase) -> Result<(), String> {
                     .collect::<Result<_, _>>()?,
                 cancel_after_ms: None,
             };
-            tokio::select! {
+            // The clock starts once the mock listens and the client is built, right before
+            // the call, and stops when the call has returned or failed (`invoke` reads a
+            // pdfStream to its end). `Instant` is monotonic.
+            let started = std::time::Instant::now();
+            let outcome = tokio::select! {
                 biased;
                 () = stop.notified() => Ok(Value::Null),
                 r = invoke(&client, &call) => r?,
-            }
+            };
+            call_duration = started.elapsed();
+            outcome
         }
     };
     let mock = server.origin.clone();
@@ -930,6 +940,13 @@ async fn run_case(c: &SdkCase) -> Result<(), String> {
         &Value::Array(want.events.to_vec()),
         &mut failures,
     );
+    if let Some(min) = c.expect.min_call_ms {
+        // N-DURATION-MS: the duration is compared in integer milliseconds.
+        let took = millis(call_duration);
+        if took < min {
+            failures.push(format!("minCallMs: want at least {min} ms, only {took} ms"));
+        }
+    }
     if want.check_result {
         compare(
             "results",
