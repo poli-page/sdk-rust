@@ -9,7 +9,7 @@
 [![Lint](https://img.shields.io/badge/Lint-clippy-blue?style=flat&logo=rust&logoColor=ffffff)](https://github.com/rust-lang/rust-clippy)
 [![Deps](https://img.shields.io/badge/Deps-up%20to%20date-brightgreen?style=flat&logo=rust&logoColor=ffffff)](https://deps.rs/repo/github/poli-page/sdk-rust)
 [![Docs](https://img.shields.io/badge/Docs-online-brightgreen?style=flat&logo=readthedocs&logoColor=ffffff)](https://poli-page.github.io/sdk-rust/)
-[![License](https://img.shields.io/github/license/poli-page/sdk-rust?style=flat&logo=gnu&logoColor=ffffff&label=License)](LICENSE-MIT)
+[![License](https://img.shields.io/github/license/poli-page/sdk-rust?style=flat&logo=gnu&logoColor=ffffff&label=License)](LICENSE)
 
 Official Rust SDK for [Poli Page](https://poli.page) — render polished PDFs from HTML templates via the Poli Page API.
 
@@ -408,11 +408,4 @@ We track *current stable minus 2 minor releases* — the same cadence `tokio`, `
 
 ## License
 
-Dual-licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option. This is the Rust-ecosystem convention; pick whichever fits your project's compatibility requirements.
-
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual-licensed as above, without any additional terms or conditions.
+[MIT](LICENSE) © Poli Page

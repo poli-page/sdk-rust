@@ -12,8 +12,7 @@ on:
       - 'rust-toolchain.toml'
       - 'CHANGELOG.md'
       - 'MIGRATION.md'
-      - 'LICENSE-MIT'
-      - 'LICENSE-APACHE'
+      - 'LICENSE'
       - '.github/workflows/docs.yml'
   release: { types: [published] }
   workflow_dispatch:

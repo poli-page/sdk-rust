@@ -8,6 +8,10 @@ Breaking changes and their upgrade path are summarized in [MIGRATION.md](MIGRATI
 
 ## [Unreleased]
 
+### Changed
+
+- The crate is now licensed under MIT only (it was `MIT OR Apache-2.0`). Versions already published on crates.io stay available under `MIT OR Apache-2.0`.
+
 ## [0.13.0] - 2026-11-02
 
 Conformance with the Poli Page API contract v0.13.0
