@@ -8,7 +8,8 @@
 //! the connection, `hang` never answers) and records each request. The test
 //! then compares the recorded requests, the `on_request` / `on_retry` events
 //! and the normalized result with the case's `expect`. Timing is checked as
-//! lower bounds, measured on the server, in integer milliseconds.
+//! lower bounds in integer milliseconds: gaps between requests are measured on
+//! the server, a call's own duration (`minCallMs`) on the test's monotonic clock.
 //!
 //! `tests/contract-skip.json` maps the case ids allowed to fail to the
 //! reason. A listed case that passes, a listed id the contract does not have,
@@ -37,7 +38,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
 // ---------------------------------------------------------------------------
-// Contract format 1 (README of poli-page/api-contract)
+// Contract format 2 (README of poli-page/api-contract)
 // ---------------------------------------------------------------------------
 
 const KNOWN_FORMAT_VERSION: u64 = 2;
@@ -905,7 +906,7 @@ async fn run_case(c: &SdkCase) -> Result<(), String> {
             // The clock starts once the mock listens and the client is built, right before
             // the call, and stops when the call has returned or failed (`invoke` reads a
             // pdfStream to its end). `Instant` is monotonic.
-            let started = std::time::Instant::now();
+            let started = Instant::now();
             let outcome = tokio::select! {
                 biased;
                 () = stop.notified() => Ok(Value::Null),
