@@ -8,6 +8,26 @@ Breaking changes and their upgrade path are summarized in [MIGRATION.md](MIGRATI
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-16
+
+Conformance with the Poli Page API contract v0.15.0
+([poli-page/api-contract](https://github.com/poli-page/api-contract)). The
+crate shares its major.minor with the Poli Page API (see
+[RELEASING.md](RELEASING.md#versions)), so it goes from 0.13 to 0.15. No API
+change: upgrading needs only the requirement `poli-page = "0.15"`.
+
+### Changed
+
+- CI, the integration tests and the Release workflow run the API contract
+  v0.15.0 (format 2): the harness fails a call that returns sooner than the
+  case's `expect.minCallMs`, timed on a monotonic clock, which the
+  `timeout.hang` and `download.timeout` cases now use instead of a
+  per-request `minGapMsBefore`. The contract adds the retry rule
+  R-WAIT-FULL: no wait (a timeout or a retry delay) ends early. Tokio's
+  timers round their deadline up to the next millisecond and never fire
+  early, so the SDK already met it unchanged.
+- The `User-Agent` carries `poli-page-sdk-rust/0.15.0`.
+
 ## [0.13.1] - 2026-11-05
 
 Licensed under MIT only; 0.13.0 and earlier stay available under MIT OR Apache-2.0.
