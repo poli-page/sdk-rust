@@ -90,7 +90,7 @@ jobs:
       # the version ci.yml pins.
       - name: API contract
         id: contract
-        uses: poli-page/api-contract@0ae0dd95df8706629ddcb3a27dfda2f026154bc3 # v0.15.0-dev.1
+        uses: poli-page/api-contract@0ae0dd95df8706629ddcb3a27dfda2f026154bc3 # v0.15.0
       - run: cargo test --all-features --locked
         env:
           CI: "true"
