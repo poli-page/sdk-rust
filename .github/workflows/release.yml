@@ -100,7 +100,7 @@ jobs:
           CI: "true"
           POLI_CONTRACT: ${{ steps.contract.outputs.path }}
       - name: cargo deny
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
         with:
           # Scope to the default-feature graph, matching ci.yml (`native-tls` is
           # an opt-in escape hatch; its openssl-sys pull-in is intentional).
